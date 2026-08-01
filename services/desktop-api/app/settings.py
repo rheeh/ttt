@@ -20,6 +20,7 @@ class Settings:
     data_dir: Path
     database_path: Path
     strategy_path: Path
+    stock_pool_path: Path
 
 
 def get_settings() -> Settings:
@@ -29,4 +30,5 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         database_path=data_dir / "research.sqlite3",
         strategy_path=repo_root / "packages" / "strategy-spec" / "group-original-v1.json",
+        stock_pool_path=repo_root / "packages" / "stock-presets" / "group-original-pool.json",
     )

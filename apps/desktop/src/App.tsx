@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Database, FlaskConical, LayoutDashboard, Plus, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
 import { api } from './api'
-import type { Candidate, ScoreInput, ScoreResult } from './types'
+import type { Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
 
 const initial: ScoreInput = {
   stock_code: 'sh603501', stock_name: '韦尔股份', sector: '半导体', price: 103.6,
@@ -25,6 +25,9 @@ function App() {
   const [items, setItems] = useState<Candidate[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [scan, setScan] = useState<MarketScan | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [scanMessage, setScanMessage] = useState('')
   const best = useMemo(() => items.filter(x => x.grade === 'S' || x.grade === 'A').length, [items])
 
   const refresh = () => api.listCandidates().then(x => setItems(x.candidates)).catch(() => setItems([]))
@@ -38,6 +41,12 @@ function App() {
     setBusy(true); setMessage('')
     try { await api.saveCandidate(input); await refresh(); setMessage('已保存到本地预选股') }
     catch (error) { setMessage(String(error)) } finally { setBusy(false) }
+  }
+  async function scanPool() {
+    setScanning(true); setScanMessage('')
+    try { setScan(await api.scanPool()) }
+    catch (error) { setScanMessage(String(error)) }
+    finally { setScanning(false) }
   }
 
   return <div className="shell">
@@ -84,6 +93,26 @@ function App() {
           </>}
         </section>
       </div>
+
+      <section className="panel pool-scan">
+        <div className="panel-title"><div><span className="scan-icon"><Radar/></span><div><h2>固定观察池扫描</h2><small>66 只 A 股 · 腾讯行情 · 群友原版评分</small></div></div><button className="scan-button" onClick={scanPool} disabled={scanning}>{scanning ? <RefreshCw className="spin"/> : <Radar/>}{scanning ? '正在扫描…' : '扫描全部股票'}</button></div>
+        {scanMessage && <p className="scan-error"><AlertTriangle/>{scanMessage}</p>}
+        {!scan ? <div className="scan-placeholder"><p>从真实行情中计算行业 PE/PB 分位、板块动量和 S/A/B/C 等级。</p><span>数据缺失时会标明降级，不用伪造数据补位。</span></div> : <>
+          <div className="scan-summary">
+            <span><b>{scan.succeeded}</b> / {scan.total} 成功</span>
+            <span className="degraded"><b>{scan.degraded}</b> 条降级</span>
+            <span className={scan.failed ? 'failed':''}><b>{scan.failed}</b> 条失败</span>
+            <span className="scan-time"><Clock3/>{new Date(scan.completed_at).toLocaleTimeString('zh-CN')} · {scan.source}</span>
+          </div>
+          <div className="scan-table"><div className="scan-row scan-header"><span>等级</span><span>股票</span><span>板块</span><span>现价</span><span>涨跌</span><span>PE / PB</span><span>总分</span><span>数据状态</span></div>{scan.items.slice(0,10).map(item=><div className="scan-row" key={item.preset.code}>
+            <span className={`mini-grade grade-${(item.score?.grade ?? 'c').toLowerCase()}`}>{item.score?.grade ?? '—'}</span>
+            <span><strong>{item.quote.stock_name || item.preset.name}</strong><small>{item.preset.code}</small></span><span>{item.preset.sector}</span>
+            <span>¥{item.quote.price?.toFixed(2) ?? '—'}</span><span className={(item.quote.change_pct ?? 0)>=0?'positive':'negative'}>{item.quote.change_pct != null ? `${item.quote.change_pct>0?'+':''}${item.quote.change_pct.toFixed(2)}%` : '—'}</span>
+            <span>{item.quote.pe?.toFixed(1) ?? '—'} / {item.quote.pb?.toFixed(1) ?? '—'}</span><span><strong>{item.score?.total_score ?? '—'}</strong></span>
+            <span className={`data-status ${item.quote.status}`}>{item.quote.status === 'ok' ? '完整' : item.quote.status === 'degraded' ? '已降级' : '失败'}</span>
+          </div>)}</div>
+        </>}
+      </section>
 
       <section className="panel candidates">
         <div className="panel-title"><div><span className="step">03</span><h2>最近预选股</h2></div><button className="text-btn" onClick={refresh}>查看全部 <ChevronRight/></button></div>

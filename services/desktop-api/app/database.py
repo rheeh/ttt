@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import CandidateCreate, CandidateItem, CandidateUpdate, PriceZones, ScoreResult
+from app.models import CandidateCreate, CandidateItem, CandidateUpdate, PriceZones, QuoteSnapshot, ScoreResult
 
 
 SCHEMA = """
@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS candidate_items (
 CREATE INDEX IF NOT EXISTS ix_candidates_selected_at ON candidate_items(selected_at DESC);
 CREATE INDEX IF NOT EXISTS ix_candidates_code ON candidate_items(stock_code);
 CREATE INDEX IF NOT EXISTS ix_candidates_status ON candidate_items(status);
+CREATE TABLE IF NOT EXISTS quote_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    source TEXT NOT NULL,
+    trade_at TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    UNIQUE(stock_code, source, trade_at)
+);
+CREATE INDEX IF NOT EXISTS ix_quotes_code_time ON quote_snapshots(stock_code, trade_at DESC);
 """
 
 
@@ -103,6 +114,35 @@ class CandidateRepository:
             )
         return self.get(candidate_id)
 
+    def save_quotes(self, quotes: list[QuoteSnapshot]) -> int:
+        saved = 0
+        with self._connect() as connection:
+            for quote in quotes:
+                trade_at = quote.trade_at or quote.fetched_at
+                cursor = connection.execute(
+                    """INSERT INTO quote_snapshots
+                    (stock_code, source, trade_at, fetched_at, status, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(stock_code, source, trade_at) DO UPDATE SET
+                      fetched_at=excluded.fetched_at,
+                      status=excluded.status,
+                      payload_json=excluded.payload_json""",
+                    (
+                        quote.stock_code, quote.source, trade_at.isoformat(),
+                        quote.fetched_at.isoformat(), quote.status, quote.model_dump_json(),
+                    ),
+                )
+                saved += max(cursor.rowcount, 0)
+        return saved
+
+    def list_quote_snapshots(self, limit: int = 100) -> list[QuoteSnapshot]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM quote_snapshots ORDER BY trade_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [QuoteSnapshot.model_validate_json(row["payload_json"]) for row in rows]
+
     @staticmethod
     def _to_model(row: sqlite3.Row) -> CandidateItem:
         return CandidateItem(
@@ -114,4 +154,3 @@ class CandidateRepository:
             score_input=json.loads(row["score_input_json"]), selected_price=row["selected_price"],
             status=row["status"], note=row["note"], price_zones=PriceZones.model_validate_json(row["price_zones_json"]),
         )
-

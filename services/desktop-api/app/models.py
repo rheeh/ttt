@@ -123,3 +123,62 @@ class CandidateList(BaseModel):
     candidates: list[CandidateItem]
     total: int
 
+
+class StockPreset(BaseModel):
+    secid: str
+    code: str
+    name: str
+    sector: str
+    asset_type: Literal["stock", "etf"] = "stock"
+
+
+class QuoteSnapshot(BaseModel):
+    stock_code: str
+    stock_name: str
+    price: float | None = None
+    previous_close: float | None = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    change_pct: float | None = None
+    turnover_pct: float | None = None
+    amplitude_pct: float | None = None
+    pe: float | None = None
+    pb: float | None = None
+    volume: float | None = None
+    amount: float | None = None
+    trade_at: datetime | None = None
+    fetched_at: datetime
+    source: str
+    status: Literal["ok", "degraded", "error"]
+    missing_fields: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class PoolResponse(BaseModel):
+    version: str
+    stocks: list[StockPreset]
+    etfs: list[StockPreset]
+
+
+class MarketScanRequest(BaseModel):
+    include_etfs: bool = False
+    limit: int | None = Field(default=None, ge=1, le=100)
+
+
+class MarketScanItem(BaseModel):
+    preset: StockPreset
+    quote: QuoteSnapshot
+    score: ScoreResult | None = None
+
+
+class MarketScanResponse(BaseModel):
+    started_at: datetime
+    completed_at: datetime
+    source: str
+    total: int
+    succeeded: int
+    degraded: int
+    failed: int
+    items: list[MarketScanItem]
+

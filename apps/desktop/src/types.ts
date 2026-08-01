@@ -17,3 +17,16 @@ export type Candidate = ScoreResult & {
   source_name: string; reasons: string[]; note?: string;
 }
 
+export type QuoteSnapshot = {
+  stock_code: string; stock_name: string; price?: number; change_pct?: number;
+  pe?: number; pb?: number; trade_at?: string; fetched_at: string; source: string;
+  status: 'ok'|'degraded'|'error'; missing_fields: string[]; error?: string;
+}
+export type MarketScanItem = {
+  preset: {code: string; name: string; sector: string; asset_type: 'stock'|'etf'};
+  quote: QuoteSnapshot; score?: ScoreResult;
+}
+export type MarketScan = {
+  started_at: string; completed_at: string; source: string; total: number;
+  succeeded: number; degraded: number; failed: number; items: MarketScanItem[];
+}

@@ -7,7 +7,13 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import CandidateRepository
-from app.models import CandidateCreate, CandidateItem, CandidateList, CandidateUpdate, ScoreInput, ScoreResult
+from app.market.scanner import MarketScanner, StockPool
+from app.market.tencent import TencentQuoteProvider
+from app.models import (
+    CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
+    MarketScanRequest, MarketScanResponse, PoolResponse, QuoteSnapshot,
+    ScoreInput, ScoreResult,
+)
 from app.scoring import StrategyEngine
 from app.settings import Settings, get_settings
 
@@ -18,6 +24,12 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.engine = StrategyEngine(settings.strategy_path)
     app.state.candidates = CandidateRepository(settings.database_path)
+    app.state.pool = StockPool(settings.stock_pool_path)
+    app.state.market_scanner = MarketScanner(
+        pool=app.state.pool,
+        provider=TencentQuoteProvider(),
+        engine=app.state.engine,
+    )
     yield
 
 
@@ -42,6 +54,29 @@ def engine(request: Request) -> StrategyEngine:
 
 def candidates(request: Request) -> CandidateRepository:
     return request.app.state.candidates
+
+
+@app.get("/api/market/pool", response_model=PoolResponse)
+def get_market_pool(request: Request) -> PoolResponse:
+    return request.app.state.pool.response()
+
+
+@app.post("/api/market/scan", response_model=MarketScanResponse)
+def scan_market(payload: MarketScanRequest, request: Request) -> MarketScanResponse:
+    result = request.app.state.market_scanner.scan(
+        include_etfs=payload.include_etfs,
+        limit=payload.limit,
+    )
+    candidates(request).save_quotes([item.quote for item in result.items])
+    return result
+
+
+@app.get("/api/market/snapshots", response_model=list[QuoteSnapshot])
+def list_market_snapshots(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[QuoteSnapshot]:
+    return candidates(request).list_quote_snapshots(limit=limit)
 
 
 @app.get("/api/health")
@@ -84,4 +119,3 @@ def update_candidate(candidate_id: int, payload: CandidateUpdate, request: Reque
         return candidates(request).update(candidate_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="预选股不存在") from exc
-

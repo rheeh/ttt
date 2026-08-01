@@ -1,4 +1,4 @@
-import type { Candidate, ScoreInput, ScoreResult } from './types'
+import type { Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -17,5 +17,7 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({score_input: input, source_type: 'manual', source_name: '手动试算'}),
   }).then(parse<Candidate>),
+  scanPool: () => fetch('/api/market/scan', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({include_etfs: false}),
+  }).then(parse<MarketScan>),
 }
-
