@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, BrainCircuit, RefreshCw } from 'lucide-react'
 import { api } from './api'
 import type { AnalysisReport, StockSearchResult, WatchlistItem } from './types'
@@ -47,8 +47,24 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   const [searchResults, setSearchResults] = useState<StockSearchResult[]>([])
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   const [history, setHistory] = useState<AnalysisReport[]>([])
+  const [suggestions, setSuggestions] = useState<StockSearchResult[]>([])
+  const [suggesting, setSuggesting] = useState(false)
   const [searching, setSearching] = useState(false)
+  const skipNextSuggestion = useRef(false)
   useEffect(() => { void api.listWatchlist().then(setWatchlist).catch(() => setWatchlist([])); void api.listAnalyses(undefined, 12).then(setHistory).catch(() => setHistory([])) }, [])
+  useEffect(() => {
+    const query = stock.trim()
+    if (skipNextSuggestion.current) { skipNextSuggestion.current = false; return }
+    let active = true
+    const timer = window.setTimeout(async () => {
+      if (!query) { if (active) { setSuggestions([]); setSuggesting(false) }; return }
+      setSuggesting(true)
+      try { const results = await api.searchStocks(query); if (active) setSuggestions(results.slice(0, 8)) }
+      catch { if (active) setSuggestions([]) }
+      finally { if (active) setSuggesting(false) }
+    }, query ? 260 : 0)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [stock])
   async function run() {
     setBusy(true); setError('')
     try { const next = await api.analyze(stock, holding, cost ? Number(cost) : undefined); setReport(next); setHistory(current => [next, ...current.filter(item => item.report_id !== next.report_id)].slice(0, 12)) }
@@ -65,10 +81,16 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
     try { const saved = await api.addWatchlist(item); setWatchlist(current => [saved, ...current.filter(entry => entry.code !== saved.code)]); setStock(item.code) }
     catch (reason) { setError(String(reason)) }
   }
+  function chooseSuggestion(item: StockSearchResult) {
+    if (item.code !== stock.trim()) skipNextSuggestion.current = true
+    setStock(item.code)
+    setSearchQuery(item.name)
+    setSuggestions([])
+  }
   return <>
     <header><div><p className="eyebrow">INDIVIDUAL RESEARCH</p><h1>个股深研</h1><p>搜索全市场股票，或从“我的自选”打开技术面与火箭评分。</p></div><button className="icon-btn" onClick={onBack}><ArrowLeft /></button></header>
     <section className="panel deep-search">
-      <div className="deep-search-row"><label>股票代码或名称<input placeholder="例如 600519 / 贵州茅台" value={stock} onChange={event => setStock(event.target.value)} /></label><label className="holding-check"><input type="checkbox" checked={holding} onChange={event => setHolding(event.target.checked)} /><span />当前已持有</label>{holding && <label>持仓成本<input type="number" value={cost} onChange={event => setCost(event.target.value)} /></label>}<button className="primary deep-run" disabled={busy || !stock.trim()} onClick={run}>{busy ? <RefreshCw className="spin" /> : <BrainCircuit />}{busy ? '分析中…' : '开始深研'}</button></div>
+      <div className="deep-search-row"><div className="stock-autocomplete"><label>股票代码或名称<input autoComplete="off" placeholder="例如 600519 / 贵州茅台" value={stock} onChange={event => setStock(event.target.value)} /></label>{(suggestions.length > 0 || suggesting) && <div className="stock-suggestions" role="listbox">{suggesting && suggestions.length === 0 ? <div className="suggestion-loading">正在搜索全市场…</div> : suggestions.map(item => <button type="button" key={item.code} role="option" onMouseDown={event => event.preventDefault()} onClick={() => chooseSuggestion(item)}><strong>{item.name}</strong><span>{item.code} · {item.market ?? 'A股'}</span></button>)}</div>}</div><label className="holding-check"><input type="checkbox" checked={holding} onChange={event => setHolding(event.target.checked)} /><span />当前已持有</label>{holding && <label>持仓成本<input type="number" value={cost} onChange={event => setCost(event.target.value)} /></label>}<button className="primary deep-run" disabled={busy || !stock.trim()} onClick={run}>{busy ? <RefreshCw className="spin" /> : <BrainCircuit />}{busy ? '分析中…' : '开始深研'}</button></div>
       <div className="watchlist-tools"><label>搜索全部股票并加入自选<input placeholder="输入名称或代码，例如 九安医疗 / 002432" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} /></label><button className="scan-button" onClick={search} disabled={searching || !searchQuery.trim()}>{searching ? <RefreshCw className="spin" /> : <BrainCircuit />}{searching ? '搜索中…' : '搜索股票'}</button></div>
       {searchResults.length > 0 && <div className="search-results">{searchResults.map(item => <button key={item.code} onClick={() => void add(item)}><strong>{item.name}</strong><small>{item.code} · {item.market ?? 'A股'} · 点击加入</small></button>)}</div>}
       <div className="watchlist-strip"><span>我的自选</span>{watchlist.length === 0 ? <small>搜索股票后加入自己的观察列表</small> : watchlist.map(item => <button key={item.code} onClick={() => setStock(item.code)}>{item.name}<small>{item.code}</small></button>)}</div>
