@@ -1,0 +1,17 @@
+{
+  "$schema": "./personal-strategy.schema.json",
+  "id": "group-original-v1",
+  "name": "群友原版",
+  "version": "1.0.0",
+  "grade_thresholds": {"S": 22, "A": 14, "B": 5},
+  "preferred_sectors": ["半导体", "有色", "风电", "AI", "元器件", "新能源车", "机器人", "商业航天", "电池", "医疗", "中药", "军工", "消费电子", "铜缆CPO", "核电", "军工电子"],
+  "avoided_sectors": ["银行", "保险", "煤炭"],
+  "rotation_bonus": 4,
+  "filters": {
+    "exclude_prefixes": ["300", "688"],
+    "exclude_st": true,
+    "max_positions": 4,
+    "capital_cny": 20000
+  }
+}
+
