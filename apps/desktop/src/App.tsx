@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
 import { api } from './api'
+import { DeepResearch } from './DeepResearch'
 import type { Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
 
 const initial: ScoreInput = {
@@ -29,6 +30,8 @@ function App() {
   const [scanning, setScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState('')
   const [savingScan, setSavingScan] = useState(false)
+  const [view, setView] = useState<'desk' | 'deep'>('desk')
+  const [analysisStock, setAnalysisStock] = useState('')
   const best = useMemo(() => items.filter(x => x.grade === 'S' || x.grade === 'A').length, [items])
 
   const refresh = () => api.listCandidates().then(x => setItems(x.candidates)).catch(() => setItems([]))
@@ -61,10 +64,10 @@ function App() {
     <aside>
       <div className="brand"><span>知行</span><small>STOCK LAB</small></div>
       <nav>
-        <button className="active"><LayoutDashboard />研究台</button>
+        <button className={view === 'desk' ? 'active' : ''} onClick={() => setView('desk')}><LayoutDashboard />研究台</button>
         <button className="nav-pending" disabled title="建设中"><CircleGauge />市场复盘<span>建设中</span></button>
         <button className="nav-pending" disabled title="建设中"><Search />条件选股<span>建设中</span></button>
-        <button className="nav-pending" disabled title="建设中"><BarChart3 />个股深研<span>建设中</span></button>
+        <button className={view === 'deep' ? 'active' : ''} onClick={() => setView('deep')}><BarChart3 />个股深研</button>
         <button className="nav-pending" disabled title="建设中"><FlaskConical />回测核验<span>建设中</span></button>
         <button className="nav-pending" disabled title="建设中"><BookOpen />研究日志<span>建设中</span></button>
         <button className="nav-pending" disabled title="建设中"><Bell />达人消息<span>建设中</span></button>
@@ -73,6 +76,7 @@ function App() {
     </aside>
 
     <main>
+      {view === 'deep' ? <DeepResearch initialStock={analysisStock} onBack={() => setView('desk')} /> : <>
       <header><div><p className="eyebrow">PERSONAL RESEARCH DESK</p><h1>今日研究台</h1><p>把经验规则变成可解释、可保存、可回看的证据。</p></div><button className="icon-btn"><Settings /></button></header>
 
       <section className="stats">
@@ -119,7 +123,7 @@ function App() {
           </div>
           <div className="scan-table"><div className="scan-row scan-header"><span>等级</span><span>股票</span><span>板块</span><span>现价</span><span>涨跌</span><span>PE / PB</span><span>总分</span><span>数据状态</span></div>{scan.items.slice(0,10).map(item=><div className="scan-row" key={item.preset.code}>
             <span className={`mini-grade grade-${(item.score?.grade ?? 'c').toLowerCase()}`}>{item.score?.grade ?? '—'}</span>
-            <span><strong>{item.quote.stock_name || item.preset.name}</strong><small>{item.preset.code}</small></span><span>{item.preset.sector}</span>
+            <span><button className="scan-stock-link" onClick={() => { setAnalysisStock(item.preset.code); setView('deep') }}>{item.quote.stock_name || item.preset.name}</button><small>{item.preset.code}</small></span><span>{item.preset.sector}</span>
             <span>¥{item.quote.price?.toFixed(2) ?? '—'}</span><span className={(item.quote.change_pct ?? 0)>=0?'positive':'negative'}>{item.quote.change_pct != null ? `${item.quote.change_pct>0?'+':''}${item.quote.change_pct.toFixed(2)}%` : '—'}</span>
             <span>{item.quote.pe?.toFixed(1) ?? '—'} / {item.quote.pb?.toFixed(1) ?? '—'}</span><span><strong>{item.score?.total_score ?? '—'}</strong></span>
             <span className={`data-status ${item.quote.status}`}>{item.quote.status === 'ok' ? '完整' : item.quote.status === 'degraded' ? '已降级' : '失败'}</span>
@@ -132,6 +136,7 @@ function App() {
         {items.length === 0 ? <div className="empty-row">还没有预选股，从上方完成第一次试算。</div> : <div className="candidate-list">{items.slice(0,5).map(item=><article key={item.id}><span className={`mini-grade grade-${item.grade.toLowerCase()}`}>{item.grade}</span><div><strong>{item.stock_name}</strong><small>{item.stock_code} · {item.source_name}</small></div><div className="candidate-score">{item.total_score}<small>分</small></div><div><strong>¥{item.selected_price.toFixed(2)}</strong><small>{new Date(item.selected_at).toLocaleString('zh-CN')}</small></div><span className="status">{item.status === 'new' ? '新发现' : item.status}</span></article>)}</div>}
       </section>
       <footer>本工具仅用于个人研究与复盘，不构成投资建议，不执行任何交易。</footer>
+      </>}
     </main>
   </div>
 }

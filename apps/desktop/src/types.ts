@@ -33,3 +33,12 @@ export type MarketScan = {
   succeeded: number; degraded: number; failed: number; items: MarketScanItem[];
   scoreable: number; run_id?: number; rule_fingerprint: string; rotation_pool_codes: string[];
 }
+
+export type AnalysisReport = {
+  report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string;
+  source: string; status: 'ok'|'degraded'|'error'; missing_fields: string[];
+  quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string};
+  technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
+  rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
+  advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
+}

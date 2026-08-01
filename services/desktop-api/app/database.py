@@ -5,6 +5,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from app.analysis.models import AnalysisReport
 from app.models import (
     CandidateCreate, CandidateItem, CandidateUpdate, MarketScanResponse, PerformanceOutcome,
     PriceZones, QuoteSnapshot, ScoreInput, ScoreResult,
@@ -88,6 +89,26 @@ CREATE TABLE IF NOT EXISTS candidate_performance (
     UNIQUE(candidate_id, horizon)
 );
 CREATE INDEX IF NOT EXISTS ix_performance_due ON candidate_performance(status, due_date);
+CREATE TABLE IF NOT EXISTS analysis_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_analysis_reports_code_time ON analysis_reports(stock_code, created_at DESC);
+CREATE TABLE IF NOT EXISTS analysis_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL REFERENCES analysis_reports(id) ON DELETE CASCADE,
+    fact_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_analysis_facts_report ON analysis_facts(report_id, fact_type);
 """
 
 
@@ -294,6 +315,48 @@ class CandidateRepository:
             status=row["status"], measured_at=datetime.fromisoformat(row["measured_at"]) if row["measured_at"] else None,
             source=row["source"], note=row["note"],
         ) for row in rows]
+
+    def save_analysis(self, report: AnalysisReport) -> AnalysisReport:
+        payload = report.model_dump_json()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """INSERT INTO analysis_reports
+                (created_at, stock_code, stock_name, sector, source, status, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (report.created_at.isoformat(), report.stock_code, report.stock_name, report.sector,
+                 report.source, report.status, payload),
+            )
+            report_id = int(cursor.lastrowid)
+            for fact_type, value in (("quote", report.quote), ("technical", report.technical.model_dump()),
+                                     ("rocket", report.rocket.model_dump()), ("advice", report.advice.model_dump()),
+                                     ("bars", [bar.model_dump() for bar in report.bars])):
+                connection.execute(
+                    """INSERT INTO analysis_facts
+                    (report_id, fact_type, source, fetched_at, payload_json)
+                    VALUES (?, ?, ?, ?, ?)""",
+                    (report_id, fact_type, report.source, report.created_at.isoformat(),
+                     json.dumps(value, ensure_ascii=False, default=str)),
+                )
+        return report.model_copy(update={"report_id": report_id})
+
+    def get_analysis(self, report_id: int) -> AnalysisReport:
+        with self._connect() as connection:
+            row = connection.execute("SELECT payload_json FROM analysis_reports WHERE id = ?", (report_id,)).fetchone()
+        if row is None:
+            raise KeyError(report_id)
+        return AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": report_id})
+
+    def list_analyses(self, stock_code: str | None = None, limit: int = 50) -> list[AnalysisReport]:
+        query = "SELECT id, payload_json FROM analysis_reports"
+        params: list[object] = []
+        if stock_code:
+            query += " WHERE stock_code = ?"
+            params.append(stock_code)
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": row["id"]}) for row in rows]
 
     def list_quote_snapshots(self, limit: int = 100) -> list[QuoteSnapshot]:
         with self._connect() as connection:

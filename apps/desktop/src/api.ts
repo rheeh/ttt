@@ -1,4 +1,4 @@
-import type { Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
+import type { AnalysisReport, Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -24,4 +24,8 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({run_id: runId, limit, min_grade: 'B'}),
   }).then(parse<{created: number; skipped: number}>),
+  analyze: (stock: string, isHolding = false, positionCost?: number) => fetch('/api/analysis', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
+  }).then(parse<AnalysisReport>),
 }

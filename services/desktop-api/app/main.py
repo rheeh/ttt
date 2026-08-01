@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import CandidateRepository
+from app.analysis.models import AnalysisReport, AnalysisRequest
+from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
         engine=app.state.engine,
         history_provider=TencentDailyProvider(),
     )
+    app.state.analysis_service = IndividualAnalysisService(app.state.pool, TencentQuoteProvider())
     yield
 
 
@@ -57,6 +60,10 @@ def engine(request: Request) -> StrategyEngine:
 
 def candidates(request: Request) -> CandidateRepository:
     return request.app.state.candidates
+
+
+def analysis_service(request: Request) -> IndividualAnalysisService:
+    return request.app.state.analysis_service
 
 
 @app.get("/api/market/pool", response_model=PoolResponse)
@@ -98,6 +105,32 @@ def list_market_snapshots(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[QuoteSnapshot]:
     return candidates(request).list_quote_snapshots(limit=limit)
+
+
+@app.post("/api/analysis", response_model=AnalysisReport)
+def analyze_stock(payload: AnalysisRequest, request: Request) -> AnalysisReport:
+    try:
+        report = analysis_service(request).analyze(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return candidates(request).save_analysis(report)
+
+
+@app.get("/api/analysis/{report_id}", response_model=AnalysisReport)
+def get_analysis(report_id: int, request: Request) -> AnalysisReport:
+    try:
+        return candidates(request).get_analysis(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="分析报告不存在") from exc
+
+
+@app.get("/api/analysis", response_model=list[AnalysisReport])
+def list_analysis(
+    request: Request,
+    stock_code: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[AnalysisReport]:
+    return candidates(request).list_analyses(stock_code=stock_code, limit=limit)
 
 
 @app.get("/api/health")
