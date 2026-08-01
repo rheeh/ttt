@@ -109,6 +109,14 @@ CREATE TABLE IF NOT EXISTS analysis_facts (
     payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_facts_report ON analysis_facts(report_id, fact_type);
+CREATE TABLE IF NOT EXISTS analysis_source_cache (
+    stock_code TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(stock_code, source)
+);
+CREATE INDEX IF NOT EXISTS ix_analysis_source_cache_time ON analysis_source_cache(fetched_at DESC);
 CREATE TABLE IF NOT EXISTS watchlist_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
@@ -359,6 +367,26 @@ class CandidateRepository:
         if row is None:
             raise KeyError(report_id)
         return AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": report_id})
+
+    def save_source_cache(self, stock_code: str, source: str, fetched_at: str, payload: dict) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO analysis_source_cache (stock_code, source, fetched_at, payload_json)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(stock_code, source) DO UPDATE SET
+                  fetched_at=excluded.fetched_at, payload_json=excluded.payload_json""",
+                (stock_code, source, fetched_at, json.dumps(payload, ensure_ascii=False, default=str)),
+            )
+
+    def get_source_cache(self, stock_code: str, source: str) -> tuple[str, dict] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT fetched_at, payload_json FROM analysis_source_cache WHERE stock_code = ? AND source = ?",
+                (stock_code, source),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["fetched_at"]), json.loads(row["payload_json"])
 
     def list_analyses(self, stock_code: str | None = None, limit: int = 50) -> list[AnalysisReport]:
         query = "SELECT id, payload_json FROM analysis_reports"

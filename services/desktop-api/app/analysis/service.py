@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from typing import Any, Type
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.analysis.advice import build_advice
-from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider
-from app.analysis.diagnostics import build_diagnosis, build_factors, build_radar
+from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider, FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts
+from app.analysis.diagnostics import ZHIXING_ALGORITHM_VERSION, ZHIXING_RULE_FINGERPRINT, build_diagnosis, build_factors, build_radar
 from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
@@ -21,11 +22,12 @@ from app.models import QuoteSnapshot, StockPreset, StockSearchResult
 class IndividualAnalysisService:
     name = "tencent-qt+tencent-qfq-day"
 
-    def __init__(self, pool: StockPool, quote_provider: TencentQuoteProvider | None = None, timeout_seconds: float = 8):
+    def __init__(self, pool: StockPool, quote_provider: TencentQuoteProvider | None = None, timeout_seconds: float = 8, cache: Any | None = None):
         self.pool = pool
         self.quote_provider = quote_provider or TencentQuoteProvider(timeout_seconds=timeout_seconds)
         self.timeout_seconds = timeout_seconds
         self.by_code = {item.code: item for item in pool.stocks + pool.etfs}
+        self.cache = cache
         self.fund_flow_provider = EastmoneyFundFlowProvider(timeout_seconds)
         self.finance_provider = EastmoneyFinanceProvider(timeout_seconds)
         self.industry_provider = EastmoneyIndustryProvider(timeout_seconds)
@@ -41,25 +43,19 @@ class IndividualAnalysisService:
         benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
         benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
         fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name)
-        missing = [field for field in quote.missing_fields if field not in {"ma5", "ma10", "ma20"}]
+        core_missing = [field for field in quote.missing_fields if field in {"price", "change_pct", "pe", "pb", "turnover_pct", "amplitude_pct"}]
         if not bars:
-            missing.append("daily_bars")
+            core_missing.append("daily_bars")
         if technical.bar_count < 60:
-            missing.append("long_history")
-        if fund_flow.status != "ok":
-            missing.append("fund_flow")
-        if finance.status != "ok":
-            missing.append("finance_growth")
-        if industry.status != "ok":
-            missing.append("industry_heat")
-        if news.status != "ok":
-            missing.append("news")
+            core_missing.append("long_history")
         rocket = calculate_rocket_score(
             change_pct=quote.change_pct, pe=quote.pe, main_flow_ratio=fund_flow.main_flow_ratio,
             sector_rank=industry.rank, volume_ratio=technical.volume_ratio, inout_ratio=None,
             macd=technical.macd, revenue_growth=finance.revenue_yoy,
         )
-        missing.extend(rocket.missing_fields)
+        legacy_missing = rocket.missing_fields
+        enrichment_missing = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status in {"error", "degraded"}]
+        enrichment_stale = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status == "stale"]
         advice = build_advice(pe=quote.pe, roe=None, score=rocket.score, technical=technical,
                               is_holding=request.is_holding, position_cost=request.position_cost)
         factors = build_factors(
@@ -67,8 +63,11 @@ class IndividualAnalysisService:
             benchmark=benchmark, sector_rank=industry.rank, in_reference_pool=preset.code in self.by_code,
             fund_flow_ratio=fund_flow.main_flow_ratio, revenue_growth=finance.revenue_yoy,
         )
-        available_scores = [factor.score for factor in factors if factor.available]
-        zhixing_index = round(sum(available_scores) / len(available_scores), 2) if available_scores else 50
+        available_count = sum(factor.available for factor in factors)
+        total_factors = len(factors)
+        zhixing_raw_score = round(sum(factor.score if factor.available else 50 for factor in factors) / total_factors, 2) if total_factors else 50
+        zhixing_index = zhixing_raw_score
+        zhixing_confidence = round(available_count / total_factors * 100, 2) if total_factors else 0
         zhixing_level = "强势" if zhixing_index >= 80 else "偏强" if zhixing_index >= 60 else "中性" if zhixing_index >= 40 else "偏弱"
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
@@ -86,16 +85,27 @@ class IndividualAnalysisService:
             diagnosis = diagnosis.model_copy(update={"positive_evidence": diagnosis.positive_evidence + [f"近期开源新闻中有 {news_bull} 条偏积极"]})
         if news_bear:
             diagnosis = diagnosis.model_copy(update={"risk_evidence": diagnosis.risk_evidence + [f"近期开源新闻中有 {news_bear} 条偏风险"]})
-        deduped_missing = sorted(set(missing))
+        source_statuses = [fund_flow.status, finance.status, industry.status, news.status]
+        enrichment_status = "error" if any(status == "error" for status in source_statuses) else "stale" if any(status == "stale" for status in source_statuses) else "degraded" if any(status == "degraded" for status in source_statuses) else "ok"
+        core_status = "error" if quote.status == "error" or not bars else "degraded" if core_missing else "ok"
+        legacy_status = "error" if quote.status == "error" else "degraded" if legacy_missing else "ok"
+        deduped_missing = sorted(set(core_missing + enrichment_missing + enrichment_stale))
         return AnalysisReport(
             created_at=datetime.now(timezone.utc), stock_code=preset.code,
             stock_name=quote.stock_name or preset.name, sector=preset.sector, asset_type=preset.asset_type,
-            source=self.name, status="error" if quote.status == "error" else "degraded" if deduped_missing else "ok",
+            source=self.name, status=core_status, core_status=core_status, core_missing_fields=sorted(set(core_missing)),
+            enrichment_status=enrichment_status, enrichment_missing_fields=sorted(set(enrichment_missing)),
+            enrichment_stale_fields=sorted(set(enrichment_stale)), legacy_score_status=legacy_status,
+            legacy_missing_fields=sorted(set(legacy_missing)),
             missing_fields=deduped_missing, quote=quote.model_dump(mode="json"), technical=technical,
             weekly=weekly, rocket=rocket, zhixing_index=zhixing_index, zhixing_level=zhixing_level,
+            zhixing_raw_score=zhixing_raw_score, raw_score=zhixing_raw_score, zhixing_confidence=zhixing_confidence, confidence=zhixing_confidence,
+            factor_coverage=f"{available_count}/{total_factors}", algorithm_version=ZHIXING_ALGORITHM_VERSION,
+            rule_fingerprint=ZHIXING_RULE_FINGERPRINT,
             factors=factors, radar=radar, trend_series=trend_series(bars), diagnosis=diagnosis, advice=advice,
             facts={"input": request.model_dump(), "data_policy": "缺失字段显示为未接入，不用默认值伪造",
-                   "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars)},
+                   "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars),
+                   "algorithm_version": ZHIXING_ALGORITHM_VERSION, "rule_fingerprint": ZHIXING_RULE_FINGERPRINT},
             fund_flow=fund_flow.model_dump(mode="json"), finance=finance.model_dump(mode="json"),
             industry=industry.model_dump(mode="json"), news=news.model_dump(mode="json"), bars=bars,
         )
@@ -108,7 +118,36 @@ class IndividualAnalysisService:
                 "industry": executor.submit(self.industry_provider.fetch, code),
                 "news": executor.submit(self.news_provider.fetch, name),
             }
-            return tuple(futures[key].result() for key in ("fund_flow", "finance", "industry", "news"))
+            raw = tuple(futures[key].result() for key in ("fund_flow", "finance", "industry", "news"))
+        return (
+            self._with_cache(code, raw[0], FundFlowFacts),
+            self._with_cache(code, raw[1], FinanceFacts),
+            self._with_cache(code, raw[2], IndustryFacts),
+            self._with_cache(code, raw[3], NewsFacts),
+        )
+
+    def _with_cache(self, code: str, result: Any, model_type: Type[Any]) -> Any:
+        now = datetime.now(timezone.utc)
+        age = max(0.0, (now - result.fetched_at).total_seconds())
+        if result.status == "ok":
+            fresh = result.model_copy(update={"data_age_seconds": round(age, 1)})
+            if self.cache is not None:
+                self.cache.save_source_cache(code, result.source, result.fetched_at.isoformat(), fresh.model_dump(mode="json"))
+            return fresh
+        if self.cache is not None:
+            cached = self.cache.get_source_cache(code, result.source)
+            if cached is not None:
+                cached_at, payload = cached
+                cached_result = model_type.model_validate(payload)
+                try:
+                    cached_age = max(0.0, (now - datetime.fromisoformat(cached_at)).total_seconds())
+                except ValueError:
+                    cached_age = age
+                return cached_result.model_copy(update={
+                    "status": "stale", "cache_used": True, "data_age_seconds": round(cached_age, 1),
+                    "error": f"本次请求失败，使用最近成功缓存：{result.error or 'unknown error'}",
+                })
+        return result.model_copy(update={"data_age_seconds": round(age, 1)})
 
     def resolve(self, value: str) -> StockPreset:
         normalized = value.strip().lower()

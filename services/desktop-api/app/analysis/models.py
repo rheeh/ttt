@@ -123,11 +123,25 @@ class AnalysisReport(BaseModel):
     source: str
     status: Literal["ok", "degraded", "error"]
     missing_fields: list[str] = Field(default_factory=list)
+    core_status: Literal["ok", "degraded", "error"] = "degraded"
+    core_missing_fields: list[str] = Field(default_factory=list)
+    enrichment_status: Literal["ok", "degraded", "stale", "error"] = "degraded"
+    enrichment_missing_fields: list[str] = Field(default_factory=list)
+    enrichment_stale_fields: list[str] = Field(default_factory=list)
+    legacy_score_status: Literal["ok", "degraded", "error"] = "degraded"
+    legacy_missing_fields: list[str] = Field(default_factory=list)
     quote: dict
     technical: TechnicalIndicators
     weekly: TechnicalIndicators = Field(default_factory=TechnicalIndicators)
     rocket: RocketScore
     zhixing_index: float = Field(default=0, ge=0, le=100)
+    zhixing_raw_score: float = Field(default=0, ge=0, le=100)
+    raw_score: float = Field(default=0, ge=0, le=100)
+    zhixing_confidence: float = Field(default=0, ge=0, le=100)
+    confidence: float = Field(default=0, ge=0, le=100)
+    factor_coverage: str = "0/0"
+    algorithm_version: str = "1.1.0"
+    rule_fingerprint: str = ""
     zhixing_level: Literal["强势", "偏强", "中性", "偏弱"] = "中性"
     factors: list[FactorScore] = Field(default_factory=list)
     radar: list[RadarDimension] = Field(default_factory=list)

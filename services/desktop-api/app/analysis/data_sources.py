@@ -24,6 +24,8 @@ class FundFlowFacts(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "error"
     error: str | None = None
+    data_age_seconds: float | None = None
+    cache_used: bool = False
 
 
 class FinanceFacts(BaseModel):
@@ -36,6 +38,8 @@ class FinanceFacts(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "error"
     error: str | None = None
+    data_age_seconds: float | None = None
+    cache_used: bool = False
 
 
 class IndustryFacts(BaseModel):
@@ -48,6 +52,8 @@ class IndustryFacts(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "error"
     error: str | None = None
+    data_age_seconds: float | None = None
+    cache_used: bool = False
 
 
 class NewsItem(BaseModel):
@@ -65,12 +71,27 @@ class NewsFacts(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "error"
     error: str | None = None
+    data_age_seconds: float | None = None
+    cache_used: bool = False
 
 
 def _json_request(url: str, timeout: float) -> dict:
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0 ZhixingStockResearch/0.4", "Referer": "https://quote.eastmoney.com/"})
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", "ignore"))
+    return json.loads(_request_text(url, timeout, referer="https://quote.eastmoney.com/") or "{}")
+
+
+def _request_text(url: str, timeout: float, *, referer: str) -> str:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0 ZhixingStockResearch/0.5", "Referer": referer})
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8", "ignore")
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(.2)
+    assert last_error is not None
+    raise last_error
 
 
 class EastmoneyFundFlowProvider:
@@ -189,9 +210,7 @@ class EastmoneyNewsProvider:
             return NewsFacts(error=str(exc))
 
     def _request_text(self, url: str) -> str:
-        request = Request(url, headers={"User-Agent": "Mozilla/5.0 ZhixingStockResearch/0.4", "Referer": "https://so.eastmoney.com/"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return response.read().decode("utf-8", "ignore")
+        return _request_text(url, self.timeout_seconds, referer="https://so.eastmoney.com/")
 
     @staticmethod
     def _item(row: dict) -> NewsItem:

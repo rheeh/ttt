@@ -28,6 +28,8 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
   }).then(parse<AnalysisReport>),
+  listAnalyses: (stockCode?: string, limit = 20) => fetch(`/api/analysis?limit=${limit}${stockCode ? `&stock_code=${encodeURIComponent(stockCode)}` : ''}`).then(parse<AnalysisReport[]>),
+  getAnalysis: (reportId: number) => fetch(`/api/analysis/${reportId}`).then(parse<AnalysisReport>),
   searchStocks: (query: string) => fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`).then(parse<StockSearchResult[]>),
   listWatchlist: () => fetch('/api/watchlist').then(parse<WatchlistItem[]>),
   addWatchlist: (item: StockSearchResult) => fetch('/api/watchlist', {

@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
         engine=app.state.engine,
         history_provider=TencentDailyProvider(),
     )
-    app.state.analysis_service = IndividualAnalysisService(app.state.pool, TencentQuoteProvider())
+    app.state.analysis_service = IndividualAnalysisService(app.state.pool, TencentQuoteProvider(), cache=app.state.candidates)
     yield
 
 

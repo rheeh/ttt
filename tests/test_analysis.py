@@ -53,6 +53,15 @@ def test_eastmoney_news_jsonp_parser(monkeypatch):
     assert result.status == "ok" and result.items[0].sentiment == "bull"
 
 
+def test_source_cache_returns_stale_snapshot(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider(), cache=repo)
+    fresh = FundFlowFacts(trade_date="2026-07-31", main_inflow=1.2, main_flow_ratio=.03, status="ok")
+    repo.save_source_cache("sz002432", fresh.source, fresh.fetched_at.isoformat(), fresh.model_dump(mode="json"))
+    stale = service._with_cache("sz002432", FundFlowFacts(status="error", error="remote closed"), FundFlowFacts)
+    assert stale.status == "stale" and stale.cache_used is True and stale.main_flow_ratio == .03
+
+
 class FakeQuoteProvider:
     def fetch(self, presets):
         now = datetime(2026, 7, 31, 8, tzinfo=timezone.utc)
@@ -87,9 +96,14 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         payload = response.json()
         assert payload["report_id"] == 1
         assert payload["technical"]["ma20"] is not None
-        assert payload["rocket"]["dimensions"] and payload["status"] == "degraded"
+        assert payload["rocket"]["dimensions"] and payload["status"] == "ok"
+        assert payload["core_status"] == "ok"
+        assert payload["legacy_score_status"] == "degraded"
         assert payload["zhixing_index"] >= 0
         assert len(payload["factors"]) == 10
+        assert payload["factor_coverage"] == "10/10"
+        assert payload["zhixing_confidence"] == 100
+        assert payload["raw_score"] == payload["zhixing_index"]
         assert len(payload["radar"]) == 6
         assert payload["fund_flow"]["status"] == "ok"
         assert payload["finance"]["revenue_yoy"] == 12
@@ -100,6 +114,8 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         stored = client.get(f"/api/analysis/{payload['report_id']}")
         assert stored.status_code == 200
         assert stored.json()["stock_code"] == "sh600519"
+        history = client.get("/api/analysis?limit=5")
+        assert history.status_code == 200 and history.json()[0]["report_id"] == payload["report_id"]
         with client.app.state.candidates._connect() as connection:
             fact_types = {row[0] for row in connection.execute("SELECT fact_type FROM analysis_facts WHERE report_id = ?", (payload["report_id"],))}
         assert {"fund_flow", "finance", "industry", "news"}.issubset(fact_types)

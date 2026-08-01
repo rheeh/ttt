@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from statistics import mean
+from hashlib import sha256
 
 from app.analysis.models import Diagnosis, FactorScore, RadarDimension, TechnicalIndicators
+
+
+ZHIXING_ALGORITHM_VERSION = "1.1.0"
+ZHIXING_RULE_FINGERPRINT = sha256(
+    b"zhixing-10-factor-v1.1|neutral-unavailable=50|radar-six-dimensions|finance-industry-fund-flow"
+).hexdigest()[:16]
 
 
 def _score(key: str, label: str, value: float, reason: str, available: bool = True, source: str = "derived") -> FactorScore:
@@ -98,7 +105,7 @@ def build_radar(factors: list[FactorScore]) -> list[RadarDimension]:
     }
     by_key = {factor.key: factor for factor in factors}
     return [RadarDimension(key=key, label=label,
-                           score=round(mean([by_key[item].score for item in keys if by_key[item].available]) if any(by_key[item].available for item in keys) else 50, 2),
+                           score=round(mean([by_key[item].score for item in keys]), 2),
                            factor_keys=keys) for key, (label, keys) in groups.items()]
 
 
