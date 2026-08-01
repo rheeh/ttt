@@ -145,13 +145,29 @@ class QuoteSnapshot(BaseModel):
     amplitude_pct: float | None = None
     pe: float | None = None
     pb: float | None = None
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
     volume: float | None = None
     amount: float | None = None
     trade_at: datetime | None = None
     fetched_at: datetime
     source: str
+    history_source: str | None = None
     status: Literal["ok", "degraded", "error"]
     missing_fields: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class DailyIndicators(BaseModel):
+    stock_code: str
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
+    bar_count: int = 0
+    latest_trade_date: str | None = None
+    source: str
+    status: Literal["ok", "error"]
     error: str | None = None
 
 
@@ -181,4 +197,3 @@ class MarketScanResponse(BaseModel):
     degraded: int
     failed: int
     items: list[MarketScanItem]
-

@@ -4,7 +4,8 @@ from pathlib import Path
 from app.database import CandidateRepository
 from app.market.scanner import MarketScanner, StockPool
 from app.market.tencent import TencentQuoteProvider
-from app.models import QuoteSnapshot
+from app.market.tencent_daily import TencentDailyProvider
+from app.models import DailyIndicators, QuoteSnapshot
 from app.scoring import StrategyEngine
 
 
@@ -42,6 +43,16 @@ def test_tencent_parser_normalizes_source_and_freshness():
     assert "main_flow_ratio" in quote.missing_fields
 
 
+def test_daily_parser_builds_moving_averages():
+    rows = [[f"2026-07-{day:02d}", "0", str(day), "0", "0", "0"] for day in range(1, 31)]
+    indicators = TencentDailyProvider.parse_rows("sh600519", rows)
+    assert indicators.status == "ok"
+    assert indicators.bar_count == 30
+    assert indicators.ma5 == 28
+    assert indicators.ma10 == 25.5
+    assert indicators.ma20 == 20.5
+
+
 class FakeProvider:
     name = "fixture"
 
@@ -52,8 +63,19 @@ class FakeProvider:
             previous_close=10, open=10, high=11, low=9,
             change_pct=float(index + 1), turnover_pct=2, amplitude_pct=3,
             pe=10 + index * 5, pb=1 + index, fetched_at=now, trade_at=now,
-            source=self.name, status="degraded", missing_fields=["main_flow_ratio"],
+            source=self.name, status="degraded",
+            missing_fields=["main_flow_ratio", "quality_score", "ma5", "ma10", "ma20"],
         ) for index, item in enumerate(presets)]
+
+
+class FakeHistoryProvider:
+    name = "fixture-history"
+
+    def fetch(self, presets):
+        return {item.code: DailyIndicators(
+            stock_code=item.code, ma5=9, ma10=8, ma20=7, bar_count=30,
+            latest_trade_date="2026-07-31", source=self.name, status="ok",
+        ) for item in presets}
 
 
 def test_scanner_scores_and_sorts_fixture_quotes():
@@ -68,6 +90,17 @@ def test_scanner_scores_and_sorts_fixture_quotes():
     assert scores == sorted(scores, reverse=True)
 
 
+def test_scanner_merges_daily_indicators_into_trend_score():
+    scanner = MarketScanner(
+        StockPool(POOL), FakeProvider(), StrategyEngine(STRATEGY), FakeHistoryProvider(),
+    )
+    result = scanner.scan(limit=2)
+    assert result.source == "fixture+fixture-history"
+    assert all(item.quote.ma20 == 7 for item in result.items)
+    assert all("ma20" not in item.quote.missing_fields for item in result.items)
+    assert all(next(part for part in item.score.dimensions if part.name == "trend").score == 3 for item in result.items)
+
+
 def test_quote_snapshots_are_upserted(tmp_path):
     quote = TencentQuoteProvider.parse_response(tencent_line())["sh600519"]
     repo = CandidateRepository(tmp_path / "research.sqlite3")
@@ -76,4 +109,3 @@ def test_quote_snapshots_are_upserted(tmp_path):
     cached = repo.list_quote_snapshots()
     assert len(cached) == 1
     assert cached[0].price == 1351.0
-

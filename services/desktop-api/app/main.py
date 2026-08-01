@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import CandidateRepository
 from app.market.scanner import MarketScanner, StockPool
 from app.market.tencent import TencentQuoteProvider
+from app.market.tencent_daily import TencentDailyProvider
 from app.models import (
     CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
     MarketScanRequest, MarketScanResponse, PoolResponse, QuoteSnapshot,
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
         pool=app.state.pool,
         provider=TencentQuoteProvider(),
         engine=app.state.engine,
+        history_provider=TencentDailyProvider(),
     )
     yield
 
