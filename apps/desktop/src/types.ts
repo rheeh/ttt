@@ -47,7 +47,7 @@ export type AnalysisReport = {
   enrichment_status: 'ok'|'degraded'|'stale'|'error'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
   legacy_score_status: 'ok'|'degraded'|'error'; legacy_missing_fields: string[];
   quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string; fetched_at?: string; source?: string; status?: string};
-  technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
+  technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; trend: string; bar_count: number; atr14?: number; bollinger_width?: number; return_20d_pct?: number; return_60d_pct?: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   weekly: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
   zhixing_index: number; zhixing_level: string; zhixing_raw_score: number; raw_score: number; zhixing_confidence: number; confidence: number; factor_coverage: string; algorithm_version: string; rule_fingerprint: string;
@@ -64,6 +64,8 @@ export type AnalysisReport = {
   freshness: Record<string, {key?: string; state: 'fresh'|'warning'|'stale'|'expired'|'error'|'unknown'; fetched_at?: string; trade_at?: string; trade_date?: string; report_date?: string; latest_trade_date?: string; bar_count?: number; note?: string; age_seconds?: number; warning_threshold_seconds?: number; cache_used?: boolean; cache_expired?: boolean}>;
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
+
+export type CompareResponse = {reports: AnalysisReport[]; errors: Record<string, string>}
 
 export type StockSearchResult = {code: string; name: string; market?: string; asset_type: 'stock'|'etf'; source: string}
 export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}

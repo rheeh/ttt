@@ -134,6 +134,18 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         assert {"fund_flow", "finance", "industry", "news"}.issubset(fact_types)
 
 
+def test_compare_api_analyzes_two_stocks_in_parallel(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCK_RESEARCH_DATA_DIR", str(tmp_path))
+    with TestClient(app) as client:
+        client.app.state.analysis_service = FakeAnalysisService(client.app.state.pool, FakeQuoteProvider())
+        response = client.post("/api/analysis/compare", json={"stocks": ["sh603501", "sz002371"]})
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload["reports"]) == 2
+        assert payload["errors"] == {}
+        assert {item["stock_code"] for item in payload["reports"]} == {"sh603501", "sz002371"}
+
+
 def test_name_resolution_can_fall_back_outside_fixed_pool(monkeypatch):
     service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider())
     monkeypatch.setattr(service, "_search_name", lambda value: StockPreset(secid="sz002432", code="sz002432", name=value, sector="其他"))

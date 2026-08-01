@@ -1,4 +1,4 @@
-import type { AnalysisReport, Candidate, DataSourceHealthResponse, MarketReview, MarketReviewRun, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
+import type { AnalysisReport, Candidate, CompareResponse, DataSourceHealthResponse, MarketReview, MarketReviewRun, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -33,6 +33,9 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
   }).then(parse<AnalysisReport>),
+  compareStocks: (stocks: string[]) => fetch('/api/analysis/compare', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stocks}),
+  }).then(parse<CompareResponse>),
   listAnalyses: (stockCode?: string, limit = 20) => fetch(`/api/analysis?limit=${limit}${stockCode ? `&stock_code=${encodeURIComponent(stockCode)}` : ''}`).then(parse<AnalysisReport[]>),
   getAnalysis: (reportId: number) => fetch(`/api/analysis/${reportId}`).then(parse<AnalysisReport>),
   searchStocks: (query: string) => fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`).then(parse<StockSearchResult[]>),

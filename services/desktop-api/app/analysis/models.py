@@ -113,6 +113,10 @@ class AnalysisRequest(BaseModel):
     position_cost: float | None = Field(default=None, gt=0)
 
 
+class CompareRequest(BaseModel):
+    stocks: list[str] = Field(min_length=2, max_length=3)
+
+
 class AnalysisReport(BaseModel):
     report_id: int | None = None
     created_at: datetime
@@ -156,3 +160,8 @@ class AnalysisReport(BaseModel):
     facts: dict = Field(default_factory=dict)
     bars: list[DailyBar] = Field(default_factory=list)
     weekly_bars: list[DailyBar] = Field(default_factory=list)
+
+
+class CompareResponse(BaseModel):
+    reports: list[AnalysisReport] = Field(default_factory=list)
+    errors: dict[str, str] = Field(default_factory=dict)

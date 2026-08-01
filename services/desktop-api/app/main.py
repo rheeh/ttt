@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import date
 
@@ -8,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import CandidateRepository
-from app.analysis.models import AnalysisReport, AnalysisRequest
+from app.analysis.models import AnalysisReport, AnalysisRequest, CompareRequest, CompareResponse
 from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
 from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
@@ -128,6 +129,35 @@ def analyze_stock(payload: AnalysisRequest, request: Request) -> AnalysisReport:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return candidates(request).save_analysis(report)
+
+
+@app.post("/api/analysis/compare", response_model=CompareResponse)
+def compare_stocks(payload: CompareRequest, request: Request) -> CompareResponse:
+    stocks = list(dict.fromkeys(item.strip() for item in payload.stocks if item.strip()))
+    if len(stocks) < 2 or len(stocks) > 3:
+        raise HTTPException(status_code=422, detail="股票对比需要选择 2～3 只股票")
+
+    reports: list[AnalysisReport] = []
+    errors: dict[str, str] = {}
+
+    def analyze_one(stock: str) -> AnalysisReport:
+        report = analysis_service(request).analyze(AnalysisRequest(stock=stock))
+        return candidates(request).save_analysis(report)
+
+    with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
+        pending = {executor.submit(analyze_one, stock): stock for stock in stocks}
+        for future in as_completed(pending):
+            stock = pending[future]
+            try:
+                reports.append(future.result())
+            except ValueError as exc:
+                errors[stock] = str(exc)
+            except Exception as exc:  # keep one unavailable source from hiding other comparisons
+                errors[stock] = f"分析失败：{exc}"
+    reports.sort(key=lambda report: stocks.index(report.stock_code) if report.stock_code in stocks else len(stocks))
+    if not reports:
+        raise HTTPException(status_code=422, detail={"message": "没有成功获取可对比的股票", "errors": errors})
+    return CompareResponse(reports=reports, errors=errors)
 
 
 @app.get("/api/stocks/search", response_model=list[StockSearchResult])
