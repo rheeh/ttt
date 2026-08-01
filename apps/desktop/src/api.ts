@@ -1,4 +1,4 @@
-import type { AnalysisReport, Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
+import type { AnalysisReport, Candidate, MarketScan, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -28,4 +28,11 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
   }).then(parse<AnalysisReport>),
+  searchStocks: (query: string) => fetch(`/api/stocks/search?q=${encodeURIComponent(query)}`).then(parse<StockSearchResult[]>),
+  listWatchlist: () => fetch('/api/watchlist').then(parse<WatchlistItem[]>),
+  addWatchlist: (item: StockSearchResult) => fetch('/api/watchlist', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code: item.code, name: item.name, asset_type: item.asset_type}),
+  }).then(parse<WatchlistItem>),
+  deleteWatchlist: (code: string) => fetch(`/api/watchlist/${encodeURIComponent(code)}`, {method: 'DELETE'}),
 }

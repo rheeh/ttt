@@ -6,9 +6,10 @@ from fastapi.testclient import TestClient
 from app.analysis.indicators import calculate_indicators
 from app.analysis.models import DailyBar
 from app.analysis.service import IndividualAnalysisService
+from app.database import CandidateRepository
 from app.main import app
 from app.market.scanner import StockPool
-from app.models import QuoteSnapshot
+from app.models import QuoteSnapshot, StockPreset, WatchlistCreate
 
 
 ROOT = Path(__file__).parents[1]
@@ -61,3 +62,20 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         stored = client.get(f"/api/analysis/{payload['report_id']}")
         assert stored.status_code == 200
         assert stored.json()["stock_code"] == "sh600519"
+
+
+def test_name_resolution_can_fall_back_outside_fixed_pool(monkeypatch):
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider())
+    monkeypatch.setattr(service, "_search_name", lambda value: StockPreset(secid="sz002432", code="sz002432", name=value, sector="其他"))
+    resolved = service.resolve("九安医疗")
+    assert resolved.name == "九安医疗"
+    assert resolved.code == "sz002432"
+
+
+def test_watchlist_is_user_managed(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    saved = repo.add_watchlist(WatchlistCreate(code="sz002432", name="九安医疗"))
+    assert saved.code == "sz002432"
+    assert repo.list_watchlist()[0].name == "九安医疗"
+    assert repo.delete_watchlist("sz002432") is True
+    assert repo.list_watchlist() == []

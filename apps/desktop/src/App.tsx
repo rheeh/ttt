@@ -109,8 +109,8 @@ function App() {
         </section>
       </div>
 
-      <section className="panel pool-scan">
-        <div className="panel-title"><div><span className="scan-icon"><Radar/></span><div><h2>固定观察池扫描</h2><small>66 只 A 股 · 腾讯行情 · 群友原版评分</small></div></div><button className="scan-button" onClick={scanPool} disabled={scanning}>{scanning ? <RefreshCw className="spin"/> : <Radar/>}{scanning ? '正在扫描…' : '扫描全部股票'}</button></div>
+        <section className="panel pool-scan">
+        <div className="panel-title"><div><span className="scan-icon"><Radar/></span><div><h2>参考池扫描</h2><small>本地股票池仅作参考 · 腾讯行情 · 群友原版评分</small></div></div><button className="scan-button" onClick={scanPool} disabled={scanning}>{scanning ? <RefreshCw className="spin"/> : <Radar/>}{scanning ? '正在扫描…' : '扫描参考池'}</button></div>
         {scanMessage && <p className="scan-error"><AlertTriangle/>{scanMessage}</p>}
         {!scan ? <div className="scan-placeholder"><p>从真实行情中计算行业 PE/PB 分位、板块动量和 S/A/B/C 等级。</p><span>数据缺失时会标明降级，不用伪造数据补位。</span></div> : <>
           <div className="scan-summary">

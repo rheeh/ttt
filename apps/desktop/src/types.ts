@@ -42,3 +42,6 @@ export type AnalysisReport = {
   rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
+
+export type StockSearchResult = {code: string; name: string; market?: string; asset_type: 'stock'|'etf'; source: string}
+export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}

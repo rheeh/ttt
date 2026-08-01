@@ -135,6 +135,31 @@ class StockPreset(BaseModel):
     asset_type: Literal["stock", "etf"] = "stock"
 
 
+class StockSearchResult(BaseModel):
+    code: str
+    name: str
+    market: str | None = None
+    asset_type: Literal["stock", "etf"] = "stock"
+    source: str = "eastmoney-suggest"
+
+
+class WatchlistCreate(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
+    name: str = Field(min_length=1, max_length=80)
+    sector: str = Field(default="其他", max_length=50)
+    asset_type: Literal["stock", "etf"] = "stock"
+
+
+class WatchlistItem(BaseModel):
+    id: int
+    code: str
+    name: str
+    sector: str
+    asset_type: Literal["stock", "etf"]
+    added_at: datetime
+    source: str
+
+
 class QuoteSnapshot(BaseModel):
     stock_code: str
     stock_name: str

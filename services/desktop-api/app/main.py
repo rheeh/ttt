@@ -16,7 +16,7 @@ from app.market.tencent_daily import TencentDailyProvider
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
     MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
-    ScoreInput, ScoreResult,
+    ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
 from app.settings import Settings, get_settings
@@ -49,7 +49,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -114,6 +114,32 @@ def analyze_stock(payload: AnalysisRequest, request: Request) -> AnalysisReport:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return candidates(request).save_analysis(report)
+
+
+@app.get("/api/stocks/search", response_model=list[StockSearchResult])
+def search_stocks(
+    request: Request,
+    q: str = Query(min_length=1, max_length=40),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[StockSearchResult]:
+    return analysis_service(request).search(q, limit=limit)
+
+
+@app.get("/api/watchlist", response_model=list[WatchlistItem])
+def list_watchlist(request: Request) -> list[WatchlistItem]:
+    return candidates(request).list_watchlist()
+
+
+@app.post("/api/watchlist", response_model=WatchlistItem, status_code=201)
+def add_watchlist(payload: WatchlistCreate, request: Request) -> WatchlistItem:
+    return candidates(request).add_watchlist(payload)
+
+
+@app.delete("/api/watchlist/{code}")
+def delete_watchlist(code: str, request: Request) -> dict[str, bool]:
+    if not candidates(request).delete_watchlist(code):
+        raise HTTPException(status_code=404, detail="自选股不存在")
+    return {"deleted": True}
 
 
 @app.get("/api/analysis/{report_id}", response_model=AnalysisReport)

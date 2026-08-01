@@ -12,7 +12,7 @@ from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
 from app.market.scanner import StockPool
 from app.market.tencent import TencentQuoteProvider
-from app.models import QuoteSnapshot, StockPreset
+from app.models import QuoteSnapshot, StockPreset, StockSearchResult
 
 
 class IndividualAnalysisService:
@@ -29,7 +29,7 @@ class IndividualAnalysisService:
         quote = self.quote_provider.fetch([preset])[0]
         bars = self.fetch_bars(preset.code)
         technical = calculate_indicators(bars)
-        missing = list(quote.missing_fields)
+        missing = [field for field in quote.missing_fields if field not in {"ma5", "ma10", "ma20"}]
         if not bars:
             missing.append("daily_bars")
         if technical.bar_count < 60:
@@ -61,9 +61,60 @@ class IndividualAnalysisService:
         for preset in self.by_code.values():
             if preset.name and preset.name in value:
                 return preset
+        searched = self._search_name(value)
+        if searched is not None:
+            return searched
         if normalized.startswith(("sh", "sz")) and len(normalized) == 8 and normalized[2:].isdigit():
             return StockPreset(secid=normalized, code=normalized, name=value, sector="其他")
-        raise ValueError(f"无法识别股票：{value}，请输入 6 位代码、sh/sz 代码或固定池中的名称")
+        raise ValueError(f"无法识别股票：{value}，请输入 6 位代码、sh/sz 代码或股票名称")
+
+    def search(self, value: str, limit: int = 20) -> list[StockSearchResult]:
+        query = value.strip().lower()
+        if not query:
+            return []
+        local: list[StockSearchResult] = []
+        for preset in self.by_code.values():
+            if query in preset.code or query in preset.name.lower():
+                local.append(StockSearchResult(code=preset.code, name=preset.name, asset_type=preset.asset_type, source="reference-pool"))
+        remote = self._search_remote(value, limit=limit)
+        merged: dict[str, StockSearchResult] = {item.code: item for item in local}
+        merged.update({item.code: item for item in remote})
+        return list(merged.values())[:limit]
+
+    def _search_name(self, value: str) -> StockPreset | None:
+        """Resolve names outside the fixed pool without copying a second pool locally."""
+        rows = self._search_remote(value, limit=1)
+        if rows:
+            item = rows[0]
+            return StockPreset(secid=item.code, code=item.code, name=item.name, sector="其他", asset_type=item.asset_type)
+        return None
+
+    def _search_remote(self, value: str, limit: int = 20) -> list[StockSearchResult]:
+        try:
+            query = urlencode({"input": value.strip(), "type": "14"})
+            request = Request(
+                "https://searchapi.eastmoney.com/api/suggest/get?" + query,
+                headers={"User-Agent": "Mozilla/5.0 ZhixingStockResearch/0.3", "Referer": "https://quote.eastmoney.com/"},
+            )
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            rows = payload.get("QuotationCodeTable", {}).get("Data", [])
+            results: list[StockSearchResult] = []
+            for row in rows:
+                code = str(row.get("Code") or "")
+                name = str(row.get("Name") or "")
+                if len(code) != 6 or not name:
+                    continue
+                prefix = "sh" if code.startswith("6") else "sz"
+                normalized_code = prefix + code
+                security_name = str(row.get("SecurityTypeName") or "")
+                asset_type = "etf" if "基金" in security_name or code.startswith(("15", "16", "50", "51", "56", "58")) else "stock"
+                results.append(StockSearchResult(code=normalized_code, name=name, market=security_name or None, asset_type=asset_type))
+                if len(results) >= limit:
+                    break
+            return results
+        except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
+            return []
 
     def fetch_bars(self, code: str, days: int = 252) -> list[DailyBar]:
         query = urlencode({"param": f"{code},day,,,{days},qfq"})

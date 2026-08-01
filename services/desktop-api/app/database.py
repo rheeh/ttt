@@ -8,7 +8,7 @@ from pathlib import Path
 from app.analysis.models import AnalysisReport
 from app.models import (
     CandidateCreate, CandidateItem, CandidateUpdate, MarketScanResponse, PerformanceOutcome,
-    PriceZones, QuoteSnapshot, ScoreInput, ScoreResult,
+    PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
 )
 
 
@@ -109,6 +109,16 @@ CREATE TABLE IF NOT EXISTS analysis_facts (
     payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_facts_report ON analysis_facts(report_id, fact_type);
+CREATE TABLE IF NOT EXISTS watchlist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    asset_type TEXT NOT NULL CHECK (asset_type IN ('stock', 'etf')),
+    added_at TEXT NOT NULL,
+    source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_watchlist_added_at ON watchlist_items(added_at DESC);
 """
 
 
@@ -357,6 +367,37 @@ class CandidateRepository:
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": row["id"]}) for row in rows]
+
+    def add_watchlist(self, request: WatchlistCreate, source: str = "user-search") -> WatchlistItem:
+        added_at = datetime.now(timezone.utc)
+        code = request.code.strip().lower()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO watchlist_items (code, name, sector, asset_type, added_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code) DO UPDATE SET name=excluded.name, sector=excluded.sector,
+                    asset_type=excluded.asset_type, source=excluded.source""",
+                (code, request.name, request.sector, request.asset_type, added_at.isoformat(), source),
+            )
+            row = connection.execute("SELECT * FROM watchlist_items WHERE code = ?", (code,)).fetchone()
+        return self._watchlist_model(row)
+
+    def list_watchlist(self) -> list[WatchlistItem]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM watchlist_items ORDER BY added_at DESC, id DESC").fetchall()
+        return [self._watchlist_model(row) for row in rows]
+
+    def delete_watchlist(self, code: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM watchlist_items WHERE code = ?", (code.strip().lower(),))
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def _watchlist_model(row: sqlite3.Row) -> WatchlistItem:
+        return WatchlistItem(
+            id=row["id"], code=row["code"], name=row["name"], sector=row["sector"],
+            asset_type=row["asset_type"], added_at=datetime.fromisoformat(row["added_at"]), source=row["source"],
+        )
 
     def list_quote_snapshots(self, limit: int = 100) -> list[QuoteSnapshot]:
         with self._connect() as connection:

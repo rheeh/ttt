@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowLeft, BrainCircuit, RefreshCw } from 'lucide-react'
 import { api } from './api'
-import type { AnalysisReport } from './types'
+import type { AnalysisReport, StockSearchResult, WatchlistItem } from './types'
 
 type Props = { initialStock?: string; onBack: () => void }
 
@@ -12,16 +12,34 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   const [report, setReport] = useState<AnalysisReport | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [searchQuery, setSearchQuery] = useState(initialStock)
+  const [searchResults, setSearchResults] = useState<StockSearchResult[]>([])
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
+  const [searching, setSearching] = useState(false)
+  useEffect(() => { void api.listWatchlist().then(setWatchlist).catch(() => setWatchlist([])) }, [])
   async function run() {
     setBusy(true); setError('')
     try { setReport(await api.analyze(stock, holding, cost ? Number(cost) : undefined)) }
     catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
   }
+  async function search() {
+    setSearching(true); setError('')
+    try { setSearchResults(await api.searchStocks(searchQuery)) }
+    catch (reason) { setError(String(reason)) }
+    finally { setSearching(false) }
+  }
+  async function add(item: StockSearchResult) {
+    try { const saved = await api.addWatchlist(item); setWatchlist(current => [saved, ...current.filter(entry => entry.code !== saved.code)]); setStock(item.code) }
+    catch (reason) { setError(String(reason)) }
+  }
   return <>
-    <header><div><p className="eyebrow">INDIVIDUAL RESEARCH</p><h1>个股深研</h1><p>在 S/A/B/C 初筛之后，查看技术面与火箭评分的第二层证据。</p></div><button className="icon-btn" onClick={onBack}><ArrowLeft /></button></header>
+    <header><div><p className="eyebrow">INDIVIDUAL RESEARCH</p><h1>个股深研</h1><p>搜索全市场股票，或从“我的自选”打开技术面与火箭评分。</p></div><button className="icon-btn" onClick={onBack}><ArrowLeft /></button></header>
     <section className="panel deep-search">
       <div className="deep-search-row"><label>股票代码或名称<input placeholder="例如 600519 / 贵州茅台" value={stock} onChange={event => setStock(event.target.value)} /></label><label className="holding-check"><input type="checkbox" checked={holding} onChange={event => setHolding(event.target.checked)} /><span />当前已持有</label>{holding && <label>持仓成本<input type="number" value={cost} onChange={event => setCost(event.target.value)} /></label>}<button className="primary deep-run" disabled={busy || !stock.trim()} onClick={run}>{busy ? <RefreshCw className="spin" /> : <BrainCircuit />}{busy ? '分析中…' : '开始深研'}</button></div>
+      <div className="watchlist-tools"><label>搜索全部股票并加入自选<input placeholder="输入名称或代码，例如 九安医疗 / 002432" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} /></label><button className="scan-button" onClick={search} disabled={searching || !searchQuery.trim()}>{searching ? <RefreshCw className="spin" /> : <BrainCircuit />}{searching ? '搜索中…' : '搜索股票'}</button></div>
+      {searchResults.length > 0 && <div className="search-results">{searchResults.map(item => <button key={item.code} onClick={() => void add(item)}><strong>{item.name}</strong><small>{item.code} · {item.market ?? 'A股'} · 点击加入</small></button>)}</div>}
+      <div className="watchlist-strip"><span>我的自选</span>{watchlist.length === 0 ? <small>搜索股票后加入自己的观察列表</small> : watchlist.map(item => <button key={item.code} onClick={() => setStock(item.code)}>{item.name}<small>{item.code}</small></button>)}</div>
       {error && <p className="scan-error"><AlertTriangle />{error}</p>}
     </section>
     {!report ? <section className="panel deep-empty"><BrainCircuit /><h2>输入一只股票开始分析</h2><p>首版使用腾讯实时行情和前复权日线，缺失的资金、财务、板块和新闻字段会明确标注。</p></section> : <>
