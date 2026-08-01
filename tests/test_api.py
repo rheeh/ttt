@@ -19,4 +19,9 @@ def test_health_and_score_api(tmp_path, monkeypatch):
         })
         assert response.status_code == 200
         assert response.json()["grade"] == "S"
-
+        review = client.get("/api/market/review")
+        assert review.status_code == 200
+        assert review.json()["run_id"] is None
+        verification = client.post("/api/candidates/performance/verify")
+        assert verification.status_code == 200
+        assert verification.json()["processed"] == 0

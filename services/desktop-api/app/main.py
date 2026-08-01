@@ -11,11 +11,12 @@ from app.database import CandidateRepository
 from app.analysis.models import AnalysisReport, AnalysisRequest
 from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
+from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
+    MarketReviewResponse, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
@@ -29,13 +30,15 @@ async def lifespan(app: FastAPI):
     app.state.engine = StrategyEngine(settings.strategy_path)
     app.state.candidates = CandidateRepository(settings.database_path)
     app.state.pool = StockPool(settings.stock_pool_path)
+    quote_provider = FallbackQuoteProvider(TencentQuoteProvider())
+    history_provider = FallbackHistoryProvider(TencentDailyProvider())
     app.state.market_scanner = MarketScanner(
         pool=app.state.pool,
-        provider=TencentQuoteProvider(),
+        provider=quote_provider,
         engine=app.state.engine,
-        history_provider=TencentDailyProvider(),
+        history_provider=history_provider,
     )
-    app.state.analysis_service = IndividualAnalysisService(app.state.pool, TencentQuoteProvider(), cache=app.state.candidates)
+    app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates)
     yield
 
 
@@ -97,6 +100,11 @@ def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> Ca
             note=f"扫描运行 #{payload.run_id}，轮动池自动筛选结果",
         ), score))
     return CandidateBatchResponse(run_id=payload.run_id, created=len(created), skipped=max(0, len(pairs) - len(created)), candidates=created)
+
+
+@app.get("/api/market/review", response_model=MarketReviewResponse)
+def market_review(request: Request) -> MarketReviewResponse:
+    return candidates(request).market_review()
 
 
 @app.get("/api/market/snapshots", response_model=list[QuoteSnapshot])

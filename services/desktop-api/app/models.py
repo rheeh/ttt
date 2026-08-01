@@ -233,6 +233,47 @@ class MarketScanResponse(BaseModel):
     items: list[MarketScanItem]
 
 
+class MarketReviewItem(BaseModel):
+    stock_code: str
+    stock_name: str
+    sector: str
+    price: float | None = None
+    change_pct: float | None = None
+    grade: Literal["S", "A", "B", "C"] | None = None
+    score: int | None = None
+    status: Literal["ok", "degraded", "error"]
+
+
+class MarketSectorReview(BaseModel):
+    sector: str
+    count: int
+    average_change_pct: float | None = None
+    up_count: int
+    scoreable: int
+    average_score: float | None = None
+
+
+class MarketReviewResponse(BaseModel):
+    run_id: int | None = None
+    as_of: datetime | None = None
+    source: str = "none"
+    total: int = 0
+    succeeded: int = 0
+    degraded: int = 0
+    failed: int = 0
+    scoreable: int = 0
+    up_count: int = 0
+    down_count: int = 0
+    flat_count: int = 0
+    breadth_pct: float | None = None
+    average_change_pct: float | None = None
+    average_score: float | None = None
+    rotation_pool_codes: list[str] = Field(default_factory=list)
+    top_gainers: list[MarketReviewItem] = Field(default_factory=list)
+    top_scores: list[MarketReviewItem] = Field(default_factory=list)
+    sectors: list[MarketSectorReview] = Field(default_factory=list)
+
+
 class CandidateBatchRequest(BaseModel):
     run_id: int = Field(gt=0)
     limit: int = Field(default=10, ge=1, le=100)

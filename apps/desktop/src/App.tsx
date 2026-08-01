@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
 import { api } from './api'
 import { DeepResearch } from './DeepResearch'
-import type { Candidate, MarketScan, ScoreInput, ScoreResult } from './types'
+import { MarketReviewPage, PerformanceReviewPage } from './ReviewPages'
+import type { Candidate, MarketReview, MarketScan, ScoreInput, ScoreResult } from './types'
 
 const initial: ScoreInput = {
   stock_code: 'sh603501', stock_name: '韦尔股份', sector: '半导体', price: 103.6,
@@ -30,8 +31,11 @@ function App() {
   const [scanning, setScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState('')
   const [savingScan, setSavingScan] = useState(false)
-  const [view, setView] = useState<'desk' | 'deep'>('desk')
+  const [view, setView] = useState<'desk' | 'deep' | 'review' | 'performance'>('desk')
   const [analysisStock, setAnalysisStock] = useState('')
+  const [marketReview, setMarketReview] = useState<MarketReview | null>(null)
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [verifying, setVerifying] = useState(false)
   const best = useMemo(() => items.filter(x => x.grade === 'S' || x.grade === 'A').length, [items])
 
   const refresh = () => api.listCandidates().then(x => setItems(x.candidates)).catch(() => setItems([]))
@@ -60,15 +64,25 @@ function App() {
     finally { setSavingScan(false) }
   }
 
+  async function refreshReview() {
+    setReviewLoading(true)
+    try { setMarketReview(await api.marketReview()) } catch (error) { setScanMessage(String(error)) } finally { setReviewLoading(false) }
+  }
+
+  async function verifyPerformance() {
+    setVerifying(true)
+    try { await api.verifyPerformance(); await refresh() } catch (error) { setMessage(String(error)) } finally { setVerifying(false) }
+  }
+
   return <div className="shell">
     <aside>
       <div className="brand"><span>知行</span><small>STOCK LAB</small></div>
       <nav>
         <button className={view === 'desk' ? 'active' : ''} onClick={() => setView('desk')}><LayoutDashboard />研究台</button>
-        <button className="nav-pending" disabled title="建设中"><CircleGauge />市场复盘<span>建设中</span></button>
+        <button className={view === 'review' ? 'active' : ''} onClick={() => { setView('review'); void refreshReview() }}><CircleGauge />市场复盘</button>
         <button className="nav-pending" disabled title="建设中"><Search />条件选股<span>建设中</span></button>
         <button className={view === 'deep' ? 'active' : ''} onClick={() => setView('deep')}><BarChart3 />个股深研</button>
-        <button className="nav-pending" disabled title="建设中"><FlaskConical />回测核验<span>建设中</span></button>
+        <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refresh() }}><FlaskConical />回测核验</button>
         <button className="nav-pending" disabled title="建设中"><BookOpen />研究日志<span>建设中</span></button>
         <button className="nav-pending" disabled title="建设中"><Bell />达人消息<span>建设中</span></button>
       </nav>
@@ -76,7 +90,7 @@ function App() {
     </aside>
 
     <main>
-      {view === 'deep' ? <DeepResearch initialStock={analysisStock} onBack={() => setView('desk')} /> : <>
+      {view === 'deep' ? <DeepResearch initialStock={analysisStock} onBack={() => setView('desk')} /> : view === 'review' ? <MarketReviewPage review={marketReview} loading={reviewLoading} onRefresh={() => void refreshReview()} onOpenStock={code => { setAnalysisStock(code); setView('deep') }} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refresh()} /> : <>
       <header><div><p className="eyebrow">PERSONAL RESEARCH DESK</p><h1>今日研究台</h1><p>把经验规则变成可解释、可保存、可回看的证据。</p></div><button className="icon-btn"><Settings /></button></header>
 
       <section className="stats">

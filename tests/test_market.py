@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.database import CandidateRepository
 from app.market.scanner import MarketScanner, StockPool
+from app.market.akshare import AkshareQuoteProvider, FallbackHistoryProvider, FallbackQuoteProvider
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.models import DailyIndicators, QuoteSnapshot
@@ -51,6 +52,45 @@ def test_daily_parser_builds_moving_averages():
     assert indicators.ma5 == 28
     assert indicators.ma10 == 25.5
     assert indicators.ma20 == 20.5
+
+
+def test_akshare_quote_parser_and_fallback():
+    preset = StockPool(POOL).stocks[0].model_copy(update={"code": "sh600519"})
+    quote = AkshareQuoteProvider._parse(preset, {
+        "代码": "600519", "名称": "贵州茅台", "最新价": 1500, "涨跌幅": 1.2,
+        "换手率": 0.3, "振幅": 2.1, "市盈率-动态": 24, "市净率": 8,
+    }, datetime.now(timezone.utc))
+    assert quote.price == 1500 and quote.status == "degraded"
+
+    class Primary:
+        name = "primary"
+        def fetch(self, presets):
+            return [QuoteSnapshot(stock_code=presets[0].code, stock_name=presets[0].name, fetched_at=datetime.now(timezone.utc), source=self.name, status="error", error="unavailable")]
+
+    class Backup:
+        name = "backup"
+        def fetch(self, presets):
+            return [quote]
+
+    merged = FallbackQuoteProvider(Primary(), Backup()).fetch([preset])[0]
+    assert merged.price == 1500 and merged.source == "primary+akshare-spot-em"
+
+
+def test_history_fallback_replaces_failed_primary():
+    preset = StockPool(POOL).stocks[0]
+
+    class Primary:
+        name = "primary-history"
+        def fetch(self, presets):
+            return {item.code: DailyIndicators(stock_code=item.code, source=self.name, status="error", error="timeout") for item in presets}
+
+    class Backup:
+        name = "backup-history"
+        def fetch(self, presets):
+            return {item.code: DailyIndicators(stock_code=item.code, ma5=1, ma10=1, ma20=1, bar_count=30, source=self.name, status="ok") for item in presets}
+
+    result = FallbackHistoryProvider(Primary(), Backup()).fetch([preset])
+    assert result[preset.code].source == "backup-history" and result[preset.code].status == "ok"
 
 
 class FakeProvider:
@@ -112,3 +152,13 @@ def test_quote_snapshots_are_upserted(tmp_path):
     cached = repo.list_quote_snapshots()
     assert len(cached) == 1
     assert cached[0].price == 1351.0
+
+
+def test_market_review_summarizes_latest_scan(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    result = MarketScanner(StockPool(POOL), FakeProvider(), StrategyEngine(STRATEGY)).scan(limit=4)
+    run_id = repo.save_scan(result)
+    review = repo.market_review()
+    assert review.run_id == run_id
+    assert review.total == 4 and review.up_count == 4
+    assert review.top_scores and review.sectors

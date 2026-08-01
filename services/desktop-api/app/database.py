@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.analysis.models import AnalysisReport
 from app.models import (
-    CandidateCreate, CandidateItem, CandidateUpdate, MarketScanResponse, PerformanceOutcome,
-    PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
+    CandidateCreate, CandidateItem, CandidateUpdate, MarketReviewResponse, MarketReviewItem, MarketScanResponse, MarketSectorReview,
+    PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
 )
 
 
@@ -272,6 +272,53 @@ class CandidateRepository:
             if len(output) >= limit:
                 break
         return output
+
+    def market_review(self) -> MarketReviewResponse:
+        with self._connect() as connection:
+            run = connection.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+            if run is None:
+                return MarketReviewResponse()
+            rows = connection.execute(
+                "SELECT preset_json, quote_json, score_json FROM scan_run_items WHERE run_id = ? ORDER BY rank",
+                (run["id"],),
+            ).fetchall()
+        items: list[MarketReviewItem] = []
+        for row in rows:
+            preset = json.loads(row["preset_json"])
+            quote = QuoteSnapshot.model_validate_json(row["quote_json"])
+            score = ScoreResult.model_validate_json(row["score_json"]) if row["score_json"] else None
+            items.append(MarketReviewItem(
+                stock_code=preset["code"], stock_name=quote.stock_name or preset["name"], sector=preset["sector"],
+                price=quote.price, change_pct=quote.change_pct, grade=score.grade if score else None,
+                score=score.total_score if score else None, status=quote.status,
+            ))
+        changes = [item.change_pct for item in items if item.change_pct is not None]
+        up_count = sum(value > 0 for value in changes)
+        down_count = sum(value < 0 for value in changes)
+        score_values = [item.score for item in items if item.score is not None]
+        sectors: dict[str, list[MarketReviewItem]] = {}
+        for item in items:
+            sectors.setdefault(item.sector, []).append(item)
+        sector_rows = [MarketSectorReview(
+            sector=sector, count=len(members),
+            average_change_pct=round(sum(value for value in (item.change_pct for item in members) if value is not None) / len([item for item in members if item.change_pct is not None]), 2) if any(item.change_pct is not None for item in members) else None,
+            up_count=sum((item.change_pct or 0) > 0 for item in members),
+            scoreable=sum(item.score is not None for item in members),
+            average_score=round(sum(item.score for item in members if item.score is not None) / sum(item.score is not None for item in members), 2) if any(item.score is not None for item in members) else None,
+        ) for sector, members in sectors.items()]
+        sector_rows.sort(key=lambda item: item.average_change_pct if item.average_change_pct is not None else -999, reverse=True)
+        return MarketReviewResponse(
+            run_id=run["id"], as_of=datetime.fromisoformat(run["completed_at"]), source=run["source"],
+            total=run["total"], succeeded=run["succeeded"], degraded=run["degraded"], failed=run["failed"], scoreable=run["scoreable"],
+            up_count=up_count, down_count=down_count, flat_count=len(changes) - up_count - down_count,
+            breadth_pct=round(up_count / len(changes) * 100, 2) if changes else None,
+            average_change_pct=round(sum(changes) / len(changes), 2) if changes else None,
+            average_score=round(sum(score_values) / len(score_values), 2) if score_values else None,
+            rotation_pool_codes=json.loads(run["rotation_pool_json"]),
+            top_gainers=sorted(items, key=lambda item: item.change_pct if item.change_pct is not None else -999, reverse=True)[:10],
+            top_scores=sorted((item for item in items if item.score is not None), key=lambda item: item.score or -999, reverse=True)[:10],
+            sectors=sector_rows[:12],
+        )
 
     def verify_performance(self, as_of: date) -> list[PerformanceOutcome]:
         now = datetime.now(timezone.utc).isoformat()

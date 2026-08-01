@@ -1,0 +1,3 @@
+# Optional public-source fallback. The app works without this package and
+# only imports it when Tencent quote/history data has a core gap.
+akshare>=1.17.0

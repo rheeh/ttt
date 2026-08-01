@@ -16,7 +16,7 @@ export type ScoreResult = {
 export type Candidate = ScoreResult & {
   id: number; selected_at: string; selected_price: number; status: string;
   source_name: string; reasons: string[]; note?: string;
-  performance?: {horizon: '1d'|'5d'|'20d'; status: string; return_pct?: number; due_date: string}[];
+  performance?: {candidate_id: number; horizon: '1d'|'5d'|'20d'; status: 'pending'|'verified'|'unavailable'; due_date: string; baseline_price: number; realized_price?: number; return_pct?: number; measured_at?: string; source?: string; note?: string}[];
 }
 
 export type QuoteSnapshot = {
@@ -33,6 +33,9 @@ export type MarketScan = {
   succeeded: number; degraded: number; failed: number; items: MarketScanItem[];
   scoreable: number; run_id?: number; rule_fingerprint: string; rotation_pool_codes: string[];
 }
+export type MarketReviewItem = {stock_code: string; stock_name: string; sector: string; price?: number; change_pct?: number; grade?: 'S'|'A'|'B'|'C'; score?: number; status: 'ok'|'degraded'|'error'}
+export type MarketReview = {run_id?: number; as_of?: string; source: string; total: number; succeeded: number; degraded: number; failed: number; scoreable: number; up_count: number; down_count: number; flat_count: number; breadth_pct?: number; average_change_pct?: number; average_score?: number; rotation_pool_codes: string[]; top_gainers: MarketReviewItem[]; top_scores: MarketReviewItem[]; sectors: {sector: string; count: number; average_change_pct?: number; up_count: number; scoreable: number; average_score?: number}[]}
+export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']}
 
 export type AnalysisReport = {
   report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string;
