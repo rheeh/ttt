@@ -236,14 +236,14 @@ class IndividualAnalysisService:
             normalized = ("sh" if normalized.startswith("6") else "sz") + normalized
         if normalized in self.by_code:
             return self.by_code[normalized]
+        if normalized.startswith(("sh", "sz")) and len(normalized) == 8 and normalized[2:].isdigit():
+            return StockPreset(secid=normalized, code=normalized, name=value, sector="其他")
         for preset in self.by_code.values():
             if preset.name and preset.name in value:
                 return preset
         searched = self._search_name(value)
         if searched is not None:
             return searched
-        if normalized.startswith(("sh", "sz")) and len(normalized) == 8 and normalized[2:].isdigit():
-            return StockPreset(secid=normalized, code=normalized, name=value, sector="其他")
         raise ValueError(f"无法识别股票：{value}，请输入 6 位代码、sh/sz 代码或股票名称")
 
     def search(self, value: str, limit: int = 20) -> list[StockSearchResult]:
@@ -269,23 +269,27 @@ class IndividualAnalysisService:
 
     def _search_remote(self, value: str, limit: int = 20) -> list[StockSearchResult]:
         try:
-            query = urlencode({"input": value.strip(), "type": "14"})
+            query = urlencode({"input": value.strip(), "type": "14", "count": max(limit * 4, 50)})
             request = Request(
                 "https://searchapi.eastmoney.com/api/suggest/get?" + query,
                 headers={"User-Agent": "Mozilla/5.0 ZhixingStockResearch/0.3", "Referer": "https://quote.eastmoney.com/"},
             )
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-            rows = payload.get("QuotationCodeTable", {}).get("Data", [])
+            rows = payload.get("QuotationCodeTable", {}).get("Data") or []
             results: list[StockSearchResult] = []
             for row in rows:
                 code = str(row.get("Code") or "")
                 name = str(row.get("Name") or "")
                 if len(code) != 6 or not name:
                     continue
+                security_name = str(row.get("SecurityTypeName") or "")
+                is_a_share = security_name in {"沪A", "深A"}
+                is_fund = "基金" in security_name or security_name in {"沪基", "深基"}
+                if not (is_a_share or is_fund):
+                    continue
                 prefix = "sh" if code.startswith("6") else "sz"
                 normalized_code = prefix + code
-                security_name = str(row.get("SecurityTypeName") or "")
                 asset_type = "etf" if "基金" in security_name or code.startswith(("15", "16", "50", "51", "56", "58")) else "stock"
                 results.append(StockSearchResult(code=normalized_code, name=name, market=security_name or None, asset_type=asset_type))
                 if len(results) >= limit:

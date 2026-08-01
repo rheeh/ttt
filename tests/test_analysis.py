@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.analysis.indicators import calculate_indicators
 from app.analysis.data_sources import FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts, NewsItem
 from app.analysis import data_sources
+from app.analysis import service as analysis_service_module
 from app.analysis.models import DailyBar
 from app.analysis.service import IndividualAnalysisService
 from app.database import CandidateRepository
@@ -139,6 +140,39 @@ def test_name_resolution_can_fall_back_outside_fixed_pool(monkeypatch):
     resolved = service.resolve("九安医疗")
     assert resolved.name == "九安医疗"
     assert resolved.code == "sz002432"
+
+
+def test_remote_search_requests_multiple_candidates_and_handles_empty_data(monkeypatch):
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider())
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return '{"QuotationCodeTable":{"Data":[{"Code":"000538","Name":"云南白药","SecurityTypeName":"深A"},{"Code":"000878","Name":"云南铜业","SecurityTypeName":"深A"}]}}'.encode()
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(analysis_service_module, "urlopen", fake_urlopen)
+    rows = service._search_remote("云南", limit=20)
+    assert [row.name for row in rows] == ["云南白药", "云南铜业"]
+    assert "count=80" in calls[0]
+
+    monkeypatch.setattr(analysis_service_module, "urlopen", lambda *_args, **_kwargs: type("R", (), {"__enter__": lambda self: self, "__exit__": lambda self, *_: False, "read": lambda self: b'{"QuotationCodeTable":{"Data":null}}'})())
+    assert service._search_remote("不存在", limit=20) == []
+
+
+def test_prefixed_code_resolves_without_remote_search(monkeypatch):
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider())
+    monkeypatch.setattr(service, "_search_name", lambda _value: (_ for _ in ()).throw(AssertionError("should not search remote")))
+    assert service.resolve("sz002428").code == "sz002428"
 
 
 def test_watchlist_is_user_managed(tmp_path):
