@@ -39,7 +39,13 @@ export type AnalysisReport = {
   source: string; status: 'ok'|'degraded'|'error'; missing_fields: string[];
   quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string};
   technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
+  weekly: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
+  zhixing_index: number; zhixing_level: string;
+  factors: {key: string; label: string; score: number; reason: string; available: boolean; source: string}[];
+  radar: {key: string; label: string; score: number; factor_keys: string[]}[];
+  trend_series: {trade_date: string; close: number; ma20?: number}[];
+  diagnosis: {summary: string; position: string; positive_evidence: string[]; risk_evidence: string[]; conflicts: string[]; reassess_conditions: string[]};
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
 

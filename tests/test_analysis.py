@@ -59,6 +59,11 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         assert payload["report_id"] == 1
         assert payload["technical"]["ma20"] is not None
         assert payload["rocket"]["dimensions"] and payload["status"] == "degraded"
+        assert payload["zhixing_index"] >= 0
+        assert len(payload["factors"]) == 10
+        assert len(payload["radar"]) == 6
+        assert payload["weekly"]["bar_count"] > 0
+        assert payload["diagnosis"]["summary"]
         stored = client.get(f"/api/analysis/{payload['report_id']}")
         assert stored.status_code == 200
         assert stored.json()["stock_code"] == "sh600519"

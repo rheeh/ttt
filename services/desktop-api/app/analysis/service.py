@@ -7,7 +7,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.analysis.advice import build_advice
-from app.analysis.indicators import calculate_indicators
+from app.analysis.diagnostics import build_diagnosis, build_factors, build_radar
+from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
 from app.market.scanner import StockPool
@@ -29,6 +30,10 @@ class IndividualAnalysisService:
         quote = self.quote_provider.fetch([preset])[0]
         bars = self.fetch_bars(preset.code)
         technical = calculate_indicators(bars)
+        weekly_bars = aggregate_weekly(bars)
+        weekly = calculate_indicators(weekly_bars)
+        benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
+        benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
         missing = [field for field in quote.missing_fields if field not in {"ma5", "ma10", "ma20"}]
         if not bars:
             missing.append("daily_bars")
@@ -42,14 +47,25 @@ class IndividualAnalysisService:
         missing.extend(rocket.missing_fields)
         advice = build_advice(pe=quote.pe, roe=None, score=rocket.score, technical=technical,
                               is_holding=request.is_holding, position_cost=request.position_cost)
+        factors = build_factors(
+            price=quote.price, change_pct=quote.change_pct, daily=technical, weekly=weekly,
+            benchmark=benchmark, sector_rank=None, in_reference_pool=preset.code in self.by_code,
+        )
+        available_scores = [factor.score for factor in factors if factor.available]
+        zhixing_index = round(sum(available_scores) / len(available_scores), 2) if available_scores else 50
+        zhixing_level = "强势" if zhixing_index >= 80 else "偏强" if zhixing_index >= 60 else "中性" if zhixing_index >= 40 else "偏弱"
+        radar = build_radar(factors)
+        diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
         deduped_missing = sorted(set(missing))
         return AnalysisReport(
             created_at=datetime.now(timezone.utc), stock_code=preset.code,
             stock_name=quote.stock_name or preset.name, sector=preset.sector, asset_type=preset.asset_type,
             source=self.name, status="error" if quote.status == "error" else "degraded" if deduped_missing else "ok",
             missing_fields=deduped_missing, quote=quote.model_dump(mode="json"), technical=technical,
-            rocket=rocket, advice=advice,
-            facts={"input": request.model_dump(), "data_policy": "缺失字段显示为未接入，不用默认值伪造"}, bars=bars,
+            weekly=weekly, rocket=rocket, zhixing_index=zhixing_index, zhixing_level=zhixing_level,
+            factors=factors, radar=radar, trend_series=trend_series(bars), diagnosis=diagnosis, advice=advice,
+            facts={"input": request.model_dump(), "data_policy": "缺失字段显示为未接入，不用默认值伪造",
+                   "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars)}, bars=bars,
         )
 
     def resolve(self, value: str) -> StockPreset:

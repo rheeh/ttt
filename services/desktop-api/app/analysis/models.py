@@ -37,6 +37,10 @@ class TechnicalIndicators(BaseModel):
     volume_ratio: float | None = None
     trend: Literal["强势上涨", "上涨", "震荡", "下跌", "快速下跌", "数据不足"] = "数据不足"
     bar_count: int = 0
+    atr14: float | None = None
+    bollinger_width: float | None = None
+    return_20d_pct: float | None = None
+    return_60d_pct: float | None = None
 
 
 class RocketDimension(BaseModel):
@@ -53,6 +57,37 @@ class RocketScore(BaseModel):
     level: Literal["极强", "偏强", "中性", "偏弱", "弱势"]
     dimensions: list[RocketDimension]
     missing_fields: list[str] = Field(default_factory=list)
+
+
+class FactorScore(BaseModel):
+    key: str
+    label: str
+    score: float = Field(ge=0, le=100)
+    reason: str
+    available: bool = True
+    source: str = "derived"
+
+
+class RadarDimension(BaseModel):
+    key: str
+    label: str
+    score: float = Field(ge=0, le=100)
+    factor_keys: list[str] = Field(default_factory=list)
+
+
+class TrendPoint(BaseModel):
+    trade_date: date
+    close: float
+    ma20: float | None = None
+
+
+class Diagnosis(BaseModel):
+    summary: str
+    position: Literal["突破", "回踩", "震荡区间", "下行趋势", "数据不足"]
+    positive_evidence: list[str] = Field(default_factory=list)
+    risk_evidence: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    reassess_conditions: list[str] = Field(default_factory=list)
 
 
 class PriceZone(BaseModel):
@@ -90,7 +125,14 @@ class AnalysisReport(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     quote: dict
     technical: TechnicalIndicators
+    weekly: TechnicalIndicators = Field(default_factory=TechnicalIndicators)
     rocket: RocketScore
+    zhixing_index: float = Field(default=0, ge=0, le=100)
+    zhixing_level: Literal["强势", "偏强", "中性", "偏弱"] = "中性"
+    factors: list[FactorScore] = Field(default_factory=list)
+    radar: list[RadarDimension] = Field(default_factory=list)
+    trend_series: list[TrendPoint] = Field(default_factory=list)
+    diagnosis: Diagnosis = Field(default_factory=lambda: Diagnosis(summary="数据不足", position="数据不足"))
     advice: Advice
     facts: dict = Field(default_factory=dict)
     bars: list[DailyBar] = Field(default_factory=list)

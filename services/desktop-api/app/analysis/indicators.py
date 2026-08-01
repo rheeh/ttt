@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from statistics import mean
+from collections import defaultdict
+from statistics import mean, pstdev
 
-from app.analysis.models import DailyBar, MacdIndicator, TechnicalIndicators
+from app.analysis.models import DailyBar, MacdIndicator, TechnicalIndicators, TrendPoint
 
 
 def _ma(values: list[float], period: int) -> float | None:
@@ -58,6 +59,16 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
     volume_ratio = round(current_volume / mean(previous_volumes), 4) if previous_volumes and current_volume >= 0 else None
     ma5, ma10, ma20, ma60 = (_ma(closes, period) for period in (5, 10, 20, 60))
     last = closes[-1]
+    atr_values: list[float] = []
+    for index in range(max(1, len(bars) - 14), len(bars)):
+        previous_close = bars[index - 1].close
+        bar = bars[index]
+        atr_values.append(max(bar.high - bar.low, abs(bar.high - previous_close), abs(bar.low - previous_close)))
+    atr14 = round(mean(atr_values), 4) if atr_values else None
+    bollinger_values = closes[-20:]
+    bollinger_width = round(4 * pstdev(bollinger_values) / mean(bollinger_values) * 100, 4) if len(bollinger_values) >= 20 and mean(bollinger_values) else None
+    return_20d_pct = round((last / closes[-21] - 1) * 100, 4) if len(closes) >= 21 and closes[-21] else None
+    return_60d_pct = round((last / closes[-61] - 1) * 100, 4) if len(closes) >= 61 and closes[-61] else None
     if ma5 is None or ma10 is None:
         trend = "数据不足"
     elif last > ma5 > ma10 and (ma20 is None or ma10 > ma20):
@@ -73,5 +84,31 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
         macd=calculate_macd(closes), support20=round(min(bar.low for bar in recent), 4) if recent else None,
         resistance20=round(max(bar.high for bar in recent), 4) if recent else None,
         high52w=round(max(bar.high for bar in bars[-252:]), 4), low52w=round(min(bar.low for bar in bars[-252:]), 4),
-        volume_ratio=volume_ratio, trend=trend, bar_count=len(bars),
+        volume_ratio=volume_ratio, trend=trend, bar_count=len(bars), atr14=atr14,
+        bollinger_width=bollinger_width, return_20d_pct=return_20d_pct, return_60d_pct=return_60d_pct,
     )
+
+
+def aggregate_weekly(bars: list[DailyBar]) -> list[DailyBar]:
+    grouped: dict[tuple[int, int], list[DailyBar]] = defaultdict(list)
+    for bar in bars:
+        iso = bar.trade_date.isocalendar()
+        grouped[(iso.year, iso.week)].append(bar)
+    weekly: list[DailyBar] = []
+    for rows in grouped.values():
+        rows.sort(key=lambda row: row.trade_date)
+        weekly.append(DailyBar(
+            trade_date=rows[-1].trade_date, open=rows[0].open, close=rows[-1].close,
+            high=max(row.high for row in rows), low=min(row.low for row in rows),
+            volume=sum(row.volume for row in rows),
+        ))
+    return sorted(weekly, key=lambda row: row.trade_date)
+
+
+def trend_series(bars: list[DailyBar], limit: int = 120) -> list[TrendPoint]:
+    closes = [bar.close for bar in bars]
+    points: list[TrendPoint] = []
+    for index, bar in enumerate(bars):
+        ma20 = round(mean(closes[index - 19:index + 1]), 4) if index >= 19 else None
+        points.append(TrendPoint(trade_date=bar.trade_date, close=round(bar.close, 4), ma20=ma20))
+    return points[-limit:]
