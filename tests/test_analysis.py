@@ -37,14 +37,55 @@ def test_indicators_calculate_macd_rsi_and_levels():
 
 def test_eastmoney_fund_flow_and_finance_parsers(monkeypatch):
     payloads = [
-        {"data": {"klines": ["2026-07-31,383280688,-146952272,-236328416,-17517488,400798176,11.91"]}},
+        {"data": {"klines": [
+            "2026-07-30,100000000,-146952272,-236328416,-17517488,400798176,5.00",
+            "2026-07-31,383280688,-146952272,-236328416,-17517488,400798176,11.91",
+        ]}},
         {"result": {"data": [{"NOTICE_DATE": "2026-07-31 00:00:00", "TOTALOPERATEREVE": 100, "TOTALOPERATEREVETZ": 12.5, "PARENTNETPROFIT": 20, "PARENTNETPROFITTZ": 18.0}]}},
     ]
     monkeypatch.setattr(data_sources, "_json_request", lambda *args, **kwargs: payloads.pop(0))
     flow = data_sources.EastmoneyFundFlowProvider().fetch("sz002432")
     finance = data_sources.EastmoneyFinanceProvider().fetch("sz002432")
     assert flow.status == "ok" and flow.main_inflow == 3.8328 and flow.main_flow_ratio == .1191
+    assert flow.endpoint == "push2his.eastmoney.com"
     assert finance.status == "ok" and finance.revenue_yoy == 12.5 and finance.profit_yoy == 18
+
+
+def test_fund_flow_tries_push2his_and_fallback_hosts(monkeypatch):
+    calls = []
+
+    def request(url, _timeout):
+        calls.append(url)
+        if "push2his.eastmoney.com" in url:
+            raise OSError("blocked")
+        return {"data": {"klines": ["2026-07-31,200000000,0,0,0,0,2.5"]}}
+
+    monkeypatch.setattr(data_sources, "_json_request", request)
+    result = data_sources.EastmoneyFundFlowProvider().fetch("sh600519")
+    assert result.status == "ok" and result.trade_date == "2026-07-31"
+    assert result.main_inflow == 2 and result.main_flow_ratio == .025
+    assert "push2his.eastmoney.com" in calls[0]
+    assert any("push2.eastmoney.com" in url for url in calls[1:])
+
+
+def test_industry_tries_alternate_hosts(monkeypatch):
+    calls = []
+
+    def request(url, _timeout):
+        calls.append(url)
+        if "17.push2.eastmoney.com" in url:
+            raise OSError("blocked")
+        if "/api/qt/stock/get" in url:
+            return {"data": {"f127": "白酒"}}
+        return {"data": {"diff": {"1": {"f14": "白酒", "f3": "1.2", "f62": "100000000"}}}}
+
+    monkeypatch.setattr(data_sources, "_json_request", request)
+    provider = data_sources.EastmoneyIndustryProvider()
+    provider._cache = None
+    result = provider.fetch("sh600519")
+    assert result.status == "ok" and result.name == "白酒" and result.rank == 1
+    assert result.endpoint == "push2.eastmoney.com; push2.eastmoney.com"
+    assert any("push2.eastmoney.com" in url for url in calls)
 
 
 def test_eastmoney_news_jsonp_parser(monkeypatch):
