@@ -133,6 +133,10 @@ class AnalysisReport(BaseModel):
     radar: list[RadarDimension] = Field(default_factory=list)
     trend_series: list[TrendPoint] = Field(default_factory=list)
     diagnosis: Diagnosis = Field(default_factory=lambda: Diagnosis(summary="数据不足", position="数据不足"))
+    fund_flow: dict = Field(default_factory=dict)
+    finance: dict = Field(default_factory=dict)
+    industry: dict = Field(default_factory=dict)
+    news: dict = Field(default_factory=dict)
     advice: Advice
     facts: dict = Field(default_factory=dict)
     bars: list[DailyBar] = Field(default_factory=list)

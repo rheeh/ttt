@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.analysis.advice import build_advice
+from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider
 from app.analysis.diagnostics import build_diagnosis, build_factors, build_radar
 from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
@@ -24,6 +26,10 @@ class IndividualAnalysisService:
         self.quote_provider = quote_provider or TencentQuoteProvider(timeout_seconds=timeout_seconds)
         self.timeout_seconds = timeout_seconds
         self.by_code = {item.code: item for item in pool.stocks + pool.etfs}
+        self.fund_flow_provider = EastmoneyFundFlowProvider(timeout_seconds)
+        self.finance_provider = EastmoneyFinanceProvider(timeout_seconds)
+        self.industry_provider = EastmoneyIndustryProvider(timeout_seconds)
+        self.news_provider = EastmoneyNewsProvider(timeout_seconds)
 
     def analyze(self, request: AnalysisRequest) -> AnalysisReport:
         preset = self.resolve(request.stock)
@@ -34,28 +40,52 @@ class IndividualAnalysisService:
         weekly = calculate_indicators(weekly_bars)
         benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
         benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
+        fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name)
         missing = [field for field in quote.missing_fields if field not in {"ma5", "ma10", "ma20"}]
         if not bars:
             missing.append("daily_bars")
         if technical.bar_count < 60:
             missing.append("long_history")
+        if fund_flow.status != "ok":
+            missing.append("fund_flow")
+        if finance.status != "ok":
+            missing.append("finance_growth")
+        if industry.status != "ok":
+            missing.append("industry_heat")
+        if news.status != "ok":
+            missing.append("news")
         rocket = calculate_rocket_score(
-            change_pct=quote.change_pct, pe=quote.pe, main_flow_ratio=quote.main_flow_ratio,
-            sector_rank=None, volume_ratio=technical.volume_ratio, inout_ratio=None,
-            macd=technical.macd, revenue_growth=None,
+            change_pct=quote.change_pct, pe=quote.pe, main_flow_ratio=fund_flow.main_flow_ratio,
+            sector_rank=industry.rank, volume_ratio=technical.volume_ratio, inout_ratio=None,
+            macd=technical.macd, revenue_growth=finance.revenue_yoy,
         )
         missing.extend(rocket.missing_fields)
         advice = build_advice(pe=quote.pe, roe=None, score=rocket.score, technical=technical,
                               is_holding=request.is_holding, position_cost=request.position_cost)
         factors = build_factors(
             price=quote.price, change_pct=quote.change_pct, daily=technical, weekly=weekly,
-            benchmark=benchmark, sector_rank=None, in_reference_pool=preset.code in self.by_code,
+            benchmark=benchmark, sector_rank=industry.rank, in_reference_pool=preset.code in self.by_code,
+            fund_flow_ratio=fund_flow.main_flow_ratio, revenue_growth=finance.revenue_yoy,
         )
         available_scores = [factor.score for factor in factors if factor.available]
         zhixing_index = round(sum(available_scores) / len(available_scores), 2) if available_scores else 50
         zhixing_level = "强势" if zhixing_index >= 80 else "偏强" if zhixing_index >= 60 else "中性" if zhixing_index >= 40 else "偏弱"
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
+        diagnosis = diagnosis.model_copy(update={
+            "positive_evidence": diagnosis.positive_evidence + [f"主力净流入占比 {fund_flow.main_flow_ratio * 100:+.2f}%" if fund_flow.main_flow_ratio is not None and fund_flow.main_flow_ratio > .02 else f"营收同比 {finance.revenue_yoy:+.1f}%" if finance.revenue_yoy is not None and finance.revenue_yoy > 5 else ""],
+            "risk_evidence": diagnosis.risk_evidence + [f"主力净流出占比 {fund_flow.main_flow_ratio * 100:.2f}%" if fund_flow.main_flow_ratio is not None and fund_flow.main_flow_ratio < -.02 else f"营收同比 {finance.revenue_yoy:+.1f}%" if finance.revenue_yoy is not None and finance.revenue_yoy < -5 else ""],
+        })
+        diagnosis = diagnosis.model_copy(update={
+            "positive_evidence": [item for item in diagnosis.positive_evidence if item],
+            "risk_evidence": [item for item in diagnosis.risk_evidence if item],
+        })
+        news_bull = sum(item.sentiment == "bull" for item in news.items)
+        news_bear = sum(item.sentiment == "bear" for item in news.items)
+        if news_bull:
+            diagnosis = diagnosis.model_copy(update={"positive_evidence": diagnosis.positive_evidence + [f"近期开源新闻中有 {news_bull} 条偏积极"]})
+        if news_bear:
+            diagnosis = diagnosis.model_copy(update={"risk_evidence": diagnosis.risk_evidence + [f"近期开源新闻中有 {news_bear} 条偏风险"]})
         deduped_missing = sorted(set(missing))
         return AnalysisReport(
             created_at=datetime.now(timezone.utc), stock_code=preset.code,
@@ -65,8 +95,20 @@ class IndividualAnalysisService:
             weekly=weekly, rocket=rocket, zhixing_index=zhixing_index, zhixing_level=zhixing_level,
             factors=factors, radar=radar, trend_series=trend_series(bars), diagnosis=diagnosis, advice=advice,
             facts={"input": request.model_dump(), "data_policy": "缺失字段显示为未接入，不用默认值伪造",
-                   "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars)}, bars=bars,
+                   "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars)},
+            fund_flow=fund_flow.model_dump(mode="json"), finance=finance.model_dump(mode="json"),
+            industry=industry.model_dump(mode="json"), news=news.model_dump(mode="json"), bars=bars,
         )
+
+    def fetch_supplementary(self, code: str, name: str):
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                "fund_flow": executor.submit(self.fund_flow_provider.fetch, code),
+                "finance": executor.submit(self.finance_provider.fetch, code),
+                "industry": executor.submit(self.industry_provider.fetch, code),
+                "news": executor.submit(self.news_provider.fetch, name),
+            }
+            return tuple(futures[key].result() for key in ("fund_flow", "finance", "industry", "news"))
 
     def resolve(self, value: str) -> StockPreset:
         normalized = value.strip().lower()

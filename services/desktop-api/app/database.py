@@ -339,12 +339,16 @@ class CandidateRepository:
             report_id = int(cursor.lastrowid)
             for fact_type, value in (("quote", report.quote), ("technical", report.technical.model_dump()),
                                      ("rocket", report.rocket.model_dump()), ("advice", report.advice.model_dump()),
+                                     ("fund_flow", report.fund_flow), ("finance", report.finance),
+                                     ("industry", report.industry), ("news", report.news),
                                      ("bars", [bar.model_dump() for bar in report.bars])):
+                source = value.get("source", report.source) if isinstance(value, dict) else report.source
+                fetched_at = value.get("fetched_at", report.created_at.isoformat()) if isinstance(value, dict) else report.created_at.isoformat()
                 connection.execute(
                     """INSERT INTO analysis_facts
                     (report_id, fact_type, source, fetched_at, payload_json)
                     VALUES (?, ?, ?, ?, ?)""",
-                    (report_id, fact_type, report.source, report.created_at.isoformat(),
+                    (report_id, fact_type, source, str(fetched_at),
                      json.dumps(value, ensure_ascii=False, default=str)),
                 )
         return report.model_copy(update={"report_id": report_id})

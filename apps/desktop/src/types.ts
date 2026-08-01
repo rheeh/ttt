@@ -46,6 +46,10 @@ export type AnalysisReport = {
   radar: {key: string; label: string; score: number; factor_keys: string[]}[];
   trend_series: {trade_date: string; close: number; ma20?: number}[];
   diagnosis: {summary: string; position: string; positive_evidence: string[]; risk_evidence: string[]; conflicts: string[]; reassess_conditions: string[]};
+  fund_flow: {trade_date?: string; main_inflow?: number; main_flow_ratio?: number; small_inflow?: number; medium_inflow?: number; large_inflow?: number; super_inflow?: number; source: string; fetched_at: string; status: string; error?: string};
+  finance: {report_date?: string; revenue?: number; revenue_yoy?: number; profit?: number; profit_yoy?: number; source: string; fetched_at: string; status: string; error?: string};
+  industry: {name?: string; rank?: number; total?: number; change_pct?: number; main_inflow?: number; source: string; fetched_at: string; status: string; error?: string};
+  news: {items: {title: string; snippet: string; source_name: string; published_at: string; url: string; sentiment: 'bull'|'bear'|'neutral'}[]; source: string; fetched_at: string; status: string; error?: string};
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
 

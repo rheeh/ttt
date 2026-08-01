@@ -4,6 +4,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.analysis.indicators import calculate_indicators
+from app.analysis.data_sources import FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts, NewsItem
+from app.analysis import data_sources
 from app.analysis.models import DailyBar
 from app.analysis.service import IndividualAnalysisService
 from app.database import CandidateRepository
@@ -32,6 +34,25 @@ def test_indicators_calculate_macd_rsi_and_levels():
     assert result.support20 < result.resistance20
 
 
+def test_eastmoney_fund_flow_and_finance_parsers(monkeypatch):
+    payloads = [
+        {"data": {"klines": ["2026-07-31,383280688,-146952272,-236328416,-17517488,400798176,11.91"]}},
+        {"result": {"data": [{"NOTICE_DATE": "2026-07-31 00:00:00", "TOTALOPERATEREVE": 100, "TOTALOPERATEREVETZ": 12.5, "PARENTNETPROFIT": 20, "PARENTNETPROFITTZ": 18.0}]}},
+    ]
+    monkeypatch.setattr(data_sources, "_json_request", lambda *args, **kwargs: payloads.pop(0))
+    flow = data_sources.EastmoneyFundFlowProvider().fetch("sz002432")
+    finance = data_sources.EastmoneyFinanceProvider().fetch("sz002432")
+    assert flow.status == "ok" and flow.main_inflow == 3.8328 and flow.main_flow_ratio == .1191
+    assert finance.status == "ok" and finance.revenue_yoy == 12.5 and finance.profit_yoy == 18
+
+
+def test_eastmoney_news_jsonp_parser(monkeypatch):
+    provider = data_sources.EastmoneyNewsProvider()
+    monkeypatch.setattr(provider, "_request_text", lambda url: 'jQuery({"result":{"cmsArticleWebOld":[{"title":"公司业绩增长超预期","mediaName":"财经","date":"2026-07-31","url":"https://example.test"}]}})')
+    result = provider.fetch("九安医疗")
+    assert result.status == "ok" and result.items[0].sentiment == "bull"
+
+
 class FakeQuoteProvider:
     def fetch(self, presets):
         now = datetime(2026, 7, 31, 8, tzinfo=timezone.utc)
@@ -45,6 +66,14 @@ class FakeQuoteProvider:
 class FakeAnalysisService(IndividualAnalysisService):
     def fetch_bars(self, code, days=252):
         return bars()
+
+    def fetch_supplementary(self, code, name):
+        return (
+            FundFlowFacts(trade_date="2026-07-31", main_inflow=1.2, main_flow_ratio=0.03, status="ok"),
+            FinanceFacts(report_date="2026-06-30", revenue=100, revenue_yoy=12, profit=20, profit_yoy=18, status="ok"),
+            IndustryFacts(name="白酒", rank=8, total=100, change_pct=1.5, main_inflow=3.2, status="ok"),
+            NewsFacts(items=[NewsItem(title="业绩增长", sentiment="bull")], status="ok"),
+        )
 
 
 def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
@@ -62,11 +91,18 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         assert payload["zhixing_index"] >= 0
         assert len(payload["factors"]) == 10
         assert len(payload["radar"]) == 6
+        assert payload["fund_flow"]["status"] == "ok"
+        assert payload["finance"]["revenue_yoy"] == 12
+        assert payload["industry"]["rank"] == 8
+        assert payload["news"]["items"][0]["sentiment"] == "bull"
         assert payload["weekly"]["bar_count"] > 0
         assert payload["diagnosis"]["summary"]
         stored = client.get(f"/api/analysis/{payload['report_id']}")
         assert stored.status_code == 200
         assert stored.json()["stock_code"] == "sh600519"
+        with client.app.state.candidates._connect() as connection:
+            fact_types = {row[0] for row in connection.execute("SELECT fact_type FROM analysis_facts WHERE report_id = ?", (payload["report_id"],))}
+        assert {"fund_flow", "finance", "industry", "news"}.issubset(fact_types)
 
 
 def test_name_resolution_can_fall_back_outside_fixed_pool(monkeypatch):
