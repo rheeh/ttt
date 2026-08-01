@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,8 +12,8 @@ from app.market.scanner import MarketScanner, StockPool
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.models import (
-    CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    MarketScanRequest, MarketScanResponse, PoolResponse, QuoteSnapshot,
+    CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
+    MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult,
 )
 from app.scoring import StrategyEngine
@@ -69,8 +70,26 @@ def scan_market(payload: MarketScanRequest, request: Request) -> MarketScanRespo
         include_etfs=payload.include_etfs,
         limit=payload.limit,
     )
-    candidates(request).save_quotes([item.quote for item in result.items])
-    return result
+    repo = candidates(request)
+    repo.save_quotes([item.quote for item in result.items])
+    run_id = repo.save_scan(result)
+    trade_dates = [item.quote.trade_at.date() for item in result.items if item.quote.trade_at]
+    as_of = max(trade_dates) if trade_dates else date.today()
+    repo.verify_performance(as_of)
+    return result.model_copy(update={"run_id": run_id})
+
+
+@app.post("/api/market/scan/candidates", response_model=CandidateBatchResponse)
+def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> CandidateBatchResponse:
+    repo = candidates(request)
+    pairs = repo.scan_candidates(payload.run_id, payload.limit, payload.min_grade)
+    created: list[CandidateItem] = []
+    for score_input, score in pairs:
+        created.append(repo.create(CandidateCreate(
+            score_input=score_input, source_type="pool-scan", source_name=payload.source_name,
+            note=f"扫描运行 #{payload.run_id}，轮动池自动筛选结果",
+        ), score))
+    return CandidateBatchResponse(run_id=payload.run_id, created=len(created), skipped=max(0, len(pairs) - len(created)), candidates=created)
 
 
 @app.get("/api/market/snapshots", response_model=list[QuoteSnapshot])
@@ -121,3 +140,12 @@ def update_candidate(candidate_id: int, payload: CandidateUpdate, request: Reque
         return candidates(request).update(candidate_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="预选股不存在") from exc
+
+
+@app.post("/api/candidates/performance/verify", response_model=PerformanceVerificationResponse)
+def verify_candidate_performance(request: Request, as_of: date | None = Query(default=None)) -> PerformanceVerificationResponse:
+    repo = candidates(request)
+    effective_date = as_of or date.today()
+    outcomes = repo.verify_performance(effective_date)
+    summary = repo.performance_summary(effective_date)
+    return PerformanceVerificationResponse(as_of=effective_date, outcomes=outcomes, **summary)

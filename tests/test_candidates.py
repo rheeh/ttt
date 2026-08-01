@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from app.database import CandidateRepository
-from app.models import CandidateCreate, CandidateUpdate, ScoreInput
+from datetime import datetime, timezone
+
+from app.models import CandidateCreate, CandidateUpdate, QuoteSnapshot, ScoreInput
 from app.scoring import StrategyEngine
 
 
@@ -36,3 +38,18 @@ def test_candidate_status_can_be_updated(tmp_path):
     updated = repo.update(created.id, CandidateUpdate(status="watching"))
     assert updated.status == "watching"
 
+
+def test_candidate_performance_is_verified_from_later_snapshot(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    request = payload()
+    created = repo.create(request, StrategyEngine(STRATEGY).score(request.score_input))
+    one_day = repo.list_performance(created.id)[0]
+    trade_at = datetime.combine(one_day.due_date, datetime.min.time(), tzinfo=timezone.utc)
+    repo.save_quotes([QuoteSnapshot(
+        stock_code=created.stock_code, stock_name=created.stock_name, price=1650,
+        trade_at=trade_at, fetched_at=trade_at, source="fixture", status="ok",
+    )])
+    outcomes = repo.verify_performance(one_day.due_date)
+    verified = next(item for item in outcomes if item.horizon == "1d")
+    assert verified.status == "verified"
+    assert verified.return_pct == 10.0

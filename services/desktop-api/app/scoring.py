@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,8 @@ class StrategyEngine:
     def __init__(self, strategy_path: Path):
         self.path = strategy_path
         self.config = self._load(strategy_path)
+        source = Path(__file__).read_bytes()
+        self.rule_fingerprint = hashlib.sha256(strategy_path.read_bytes() + source).hexdigest()[:12]
 
     @staticmethod
     def _load(path: Path) -> dict[str, Any]:
@@ -42,6 +45,7 @@ class StrategyEngine:
         return ScoreResult(
             stock_code=item.stock_code, stock_name=item.stock_name,
             strategy_id=self.config["id"], strategy_version=self.config["version"],
+            rule_fingerprint=self.rule_fingerprint,
             total_score=total, grade=self._grade(total), eligible=not rejected,
             rejected_reasons=rejected, dimensions=dimensions,
         )
@@ -137,4 +141,3 @@ class StrategyEngine:
     def _grade(self, score: int) -> str:
         levels = self.config["grade_thresholds"]
         return "S" if score >= levels["S"] else "A" if score >= levels["A"] else "B" if score >= levels["B"] else "C"
-

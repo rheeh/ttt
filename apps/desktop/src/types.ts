@@ -11,10 +11,12 @@ export type ScoreResult = {
   stock_code: string; stock_name: string; total_score: number; grade: 'S'|'A'|'B'|'C';
   eligible: boolean; rejected_reasons: string[]; dimensions: Dimension[];
   strategy_id: string; strategy_version: string;
+  rule_fingerprint: string;
 }
 export type Candidate = ScoreResult & {
   id: number; selected_at: string; selected_price: number; status: string;
   source_name: string; reasons: string[]; note?: string;
+  performance?: {horizon: '1d'|'5d'|'20d'; status: string; return_pct?: number; due_date: string}[];
 }
 
 export type QuoteSnapshot = {
@@ -29,4 +31,5 @@ export type MarketScanItem = {
 export type MarketScan = {
   started_at: string; completed_at: string; source: string; total: number;
   succeeded: number; degraded: number; failed: number; items: MarketScanItem[];
+  scoreable: number; run_id?: number; rule_fingerprint: string; rotation_pool_codes: string[];
 }

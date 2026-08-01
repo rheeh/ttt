@@ -20,4 +20,8 @@ export const api = {
   scanPool: () => fetch('/api/market/scan', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({include_etfs: false}),
   }).then(parse<MarketScan>),
+  saveScanCandidates: (runId: number, limit = 10) => fetch('/api/market/scan/candidates', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({run_id: runId, limit, min_grade: 'B'}),
+  }).then(parse<{created: number; skipped: number}>),
 }

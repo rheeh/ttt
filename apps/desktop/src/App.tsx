@@ -28,6 +28,7 @@ function App() {
   const [scan, setScan] = useState<MarketScan | null>(null)
   const [scanning, setScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState('')
+  const [savingScan, setSavingScan] = useState(false)
   const best = useMemo(() => items.filter(x => x.grade === 'S' || x.grade === 'A').length, [items])
 
   const refresh = () => api.listCandidates().then(x => setItems(x.candidates)).catch(() => setItems([]))
@@ -48,15 +49,25 @@ function App() {
     catch (error) { setScanMessage(String(error)) }
     finally { setScanning(false) }
   }
+  async function saveScanCandidates() {
+    if (!scan?.run_id) return
+    setSavingScan(true); setScanMessage('')
+    try { const saved = await api.saveScanCandidates(scan.run_id); await refresh(); setScanMessage(`已将前 ${saved.created} 只 S/A/B 候选加入长期预选`) }
+    catch (error) { setScanMessage(String(error)) }
+    finally { setSavingScan(false) }
+  }
 
   return <div className="shell">
     <aside>
       <div className="brand"><span>知行</span><small>STOCK LAB</small></div>
       <nav>
         <button className="active"><LayoutDashboard />研究台</button>
-        <button><CircleGauge />市场复盘</button><button><Search />条件选股</button>
-        <button><BarChart3 />个股深研</button><button><FlaskConical />回测核验</button>
-        <button><BookOpen />研究日志</button><button><Bell />达人消息</button>
+        <button className="nav-pending" disabled title="建设中"><CircleGauge />市场复盘<span>建设中</span></button>
+        <button className="nav-pending" disabled title="建设中"><Search />条件选股<span>建设中</span></button>
+        <button className="nav-pending" disabled title="建设中"><BarChart3 />个股深研<span>建设中</span></button>
+        <button className="nav-pending" disabled title="建设中"><FlaskConical />回测核验<span>建设中</span></button>
+        <button className="nav-pending" disabled title="建设中"><BookOpen />研究日志<span>建设中</span></button>
+        <button className="nav-pending" disabled title="建设中"><Bell />达人消息<span>建设中</span></button>
       </nav>
       <div className="nav-foot"><Database />仅本机存储 <span className="status-dot" /></div>
     </aside>
@@ -102,6 +113,8 @@ function App() {
             <span><b>{scan.succeeded}</b> / {scan.total} 成功</span>
             <span className="degraded"><b>{scan.degraded}</b> 条降级</span>
             <span className={scan.failed ? 'failed':''}><b>{scan.failed}</b> 条失败</span>
+            <span><b>{scan.scoreable}</b> 条可评分</span>
+            <button className="scan-save" onClick={saveScanCandidates} disabled={savingScan || !scan.run_id}>{savingScan ? '保存中…' : '批量加入预选'}</button>
             <span className="scan-time"><Clock3/>{new Date(scan.completed_at).toLocaleTimeString('zh-CN')} · {scan.source}</span>
           </div>
           <div className="scan-table"><div className="scan-row scan-header"><span>等级</span><span>股票</span><span>板块</span><span>现价</span><span>涨跌</span><span>PE / PB</span><span>总分</span><span>数据状态</span></div>{scan.items.slice(0,10).map(item=><div className="scan-row" key={item.preset.code}>

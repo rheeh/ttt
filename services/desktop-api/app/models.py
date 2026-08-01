@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -49,6 +49,7 @@ class ScoreResult(BaseModel):
     stock_name: str
     strategy_id: str
     strategy_version: str
+    rule_fingerprint: str
     total_score: int
     grade: Literal["S", "A", "B", "C"]
     eligible: bool
@@ -108,6 +109,7 @@ class CandidateItem(BaseModel):
     source_name: str
     strategy_id: str
     strategy_version: str
+    rule_fingerprint: str
     total_score: int
     grade: Literal["S", "A", "B", "C"]
     reasons: list[str]
@@ -117,6 +119,7 @@ class CandidateItem(BaseModel):
     status: CandidateStatus
     note: str | None
     price_zones: PriceZones
+    performance: list["PerformanceOutcome"] = Field(default_factory=list)
 
 
 class CandidateList(BaseModel):
@@ -150,6 +153,7 @@ class QuoteSnapshot(BaseModel):
     ma20: float | None = None
     volume: float | None = None
     amount: float | None = None
+    main_flow_ratio: float | None = None
     trade_at: datetime | None = None
     fetched_at: datetime
     source: str
@@ -186,6 +190,7 @@ class MarketScanItem(BaseModel):
     preset: StockPreset
     quote: QuoteSnapshot
     score: ScoreResult | None = None
+    score_input: ScoreInput | None = None
 
 
 class MarketScanResponse(BaseModel):
@@ -196,4 +201,47 @@ class MarketScanResponse(BaseModel):
     succeeded: int
     degraded: int
     failed: int
+    scoreable: int
+    run_id: int | None = None
+    rule_fingerprint: str
+    rotation_pool_codes: list[str] = Field(default_factory=list)
     items: list[MarketScanItem]
+
+
+class CandidateBatchRequest(BaseModel):
+    run_id: int = Field(gt=0)
+    limit: int = Field(default=10, ge=1, le=100)
+    min_grade: Literal["S", "A", "B", "C"] = "B"
+    source_name: str = Field(default="固定观察池扫描", max_length=100)
+
+
+class CandidateBatchResponse(BaseModel):
+    run_id: int
+    created: int
+    skipped: int
+    candidates: list[CandidateItem]
+
+
+class PerformanceOutcome(BaseModel):
+    candidate_id: int
+    horizon: Literal["1d", "5d", "20d"]
+    due_date: date
+    baseline_price: float
+    realized_price: float | None = None
+    return_pct: float | None = None
+    status: Literal["pending", "verified", "unavailable"]
+    measured_at: datetime | None = None
+    source: str | None = None
+    note: str | None = None
+
+
+class PerformanceVerificationResponse(BaseModel):
+    as_of: date
+    processed: int
+    verified: int
+    pending: int
+    unavailable: int
+    outcomes: list[PerformanceOutcome]
+
+
+CandidateItem.model_rebuild()

@@ -56,21 +56,30 @@ class MarketScanner:
         sector_stats = self._sector_stats(presets, quote_by_code)
         percentiles = self._percentiles(presets, quote_by_code)
         items: list[MarketScanItem] = []
+        inputs: dict[str, ScoreInput] = {}
         for preset in presets:
             quote = quote_by_code[preset.code]
             score = None
             pe_pct, pb_pct = percentiles.get(preset.code, (None, None))
             if self._scorable(quote, pe_pct, pb_pct) and preset.asset_type == "stock":
-                score = self.engine.score(ScoreInput(
+                score_input = ScoreInput(
                     stock_code=preset.code, stock_name=quote.stock_name or preset.name,
                     sector=preset.sector, price=quote.price, pe=quote.pe, pb=quote.pb,
                     pe_percentile=pe_pct, pb_percentile=pb_pct,
                     change_pct=quote.change_pct or 0, turnover_pct=quote.turnover_pct or 0,
-                    amplitude_pct=quote.amplitude_pct or 0, main_flow_ratio=0,
+                    amplitude_pct=quote.amplitude_pct or 0, main_flow_ratio=quote.main_flow_ratio or 0,
                     sector_change_pct=sector_stats.get(preset.sector, 0), quality_score=0,
                     ma5=quote.ma5, ma10=quote.ma10, ma20=quote.ma20,
-                ))
-            items.append(MarketScanItem(preset=preset, quote=quote, score=score))
+                )
+                inputs[preset.code] = score_input
+                score = self.engine.score(score_input)
+            items.append(MarketScanItem(preset=preset, quote=quote, score=score, score_input=inputs.get(preset.code)))
+        rotation_codes = self._rotation_pool(items)
+        for item in items:
+            if item.preset.code in rotation_codes and item.score_input is not None:
+                score_input = item.score_input.model_copy(update={"in_rotation_pool": True})
+                item.score_input = score_input
+                item.score = self.engine.score(score_input)
         items.sort(key=lambda item: item.score.total_score if item.score else -10_000, reverse=True)
         completed_at = datetime.now(timezone.utc)
         return MarketScanResponse(
@@ -78,8 +87,35 @@ class MarketScanner:
             source="+".join(filter(None, [self.provider.name, self.history_provider.name if self.history_provider else None])),
             total=len(items), succeeded=sum(item.quote.status != "error" for item in items),
             degraded=sum(item.quote.status == "degraded" for item in items),
-            failed=sum(item.quote.status == "error" for item in items), items=items,
+            failed=sum(item.quote.status == "error" for item in items),
+            scoreable=sum(item.score is not None for item in items),
+            rule_fingerprint=self.engine.rule_fingerprint,
+            rotation_pool_codes=rotation_codes, items=items,
         )
+
+    @staticmethod
+    def _rotation_pool(items: list[MarketScanItem]) -> list[str]:
+        """Select a small, explainable rotation pool from the current scan.
+
+        The pool is deliberately capped at 25 names and three names per sector so
+        one unusually large sector cannot consume the whole watchlist.
+        """
+        selected: list[str] = []
+        sectors: dict[str, int] = {}
+        ranked = sorted(
+            (item for item in items if item.score and item.score.eligible),
+            key=lambda item: item.score.total_score if item.score else -10_000,
+            reverse=True,
+        )
+        for item in ranked:
+            sector = item.preset.sector
+            if sectors.get(sector, 0) >= 3:
+                continue
+            selected.append(item.preset.code)
+            sectors[sector] = sectors.get(sector, 0) + 1
+            if len(selected) >= 25:
+                break
+        return selected
 
     @staticmethod
     def _merge_indicators(quote: QuoteSnapshot, indicators: DailyIndicators | None) -> QuoteSnapshot:

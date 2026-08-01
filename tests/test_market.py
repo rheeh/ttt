@@ -86,6 +86,9 @@ def test_scanner_scores_and_sorts_fixture_quotes():
     assert result.degraded == 4
     assert result.failed == 0
     assert all(item.score is not None for item in result.items)
+    assert result.scoreable == 4
+    assert result.rotation_pool_codes
+    assert any(item.score_input and item.score_input.in_rotation_pool for item in result.items)
     scores = [item.score.total_score for item in result.items]
     assert scores == sorted(scores, reverse=True)
 
