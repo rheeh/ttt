@@ -151,6 +151,8 @@ class AnalysisReport(BaseModel):
     finance: dict = Field(default_factory=dict)
     industry: dict = Field(default_factory=dict)
     news: dict = Field(default_factory=dict)
+    freshness: dict[str, dict] = Field(default_factory=dict)
     advice: Advice
     facts: dict = Field(default_factory=dict)
     bars: list[DailyBar] = Field(default_factory=list)
+    weekly_bars: list[DailyBar] = Field(default_factory=list)

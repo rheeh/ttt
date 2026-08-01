@@ -26,6 +26,7 @@ class FundFlowFacts(BaseModel):
     error: str | None = None
     data_age_seconds: float | None = None
     cache_used: bool = False
+    cache_expired: bool = False
 
 
 class FinanceFacts(BaseModel):
@@ -40,6 +41,7 @@ class FinanceFacts(BaseModel):
     error: str | None = None
     data_age_seconds: float | None = None
     cache_used: bool = False
+    cache_expired: bool = False
 
 
 class IndustryFacts(BaseModel):
@@ -54,6 +56,7 @@ class IndustryFacts(BaseModel):
     error: str | None = None
     data_age_seconds: float | None = None
     cache_used: bool = False
+    cache_expired: bool = False
 
 
 class NewsItem(BaseModel):
@@ -73,6 +76,7 @@ class NewsFacts(BaseModel):
     error: str | None = None
     data_age_seconds: float | None = None
     cache_used: bool = False
+    cache_expired: bool = False
 
 
 def _json_request(url: str, timeout: float) -> dict:

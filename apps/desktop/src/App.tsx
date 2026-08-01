@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { api } from './api'
 import { DeepResearch } from './DeepResearch'
 import { MarketReviewPage, PerformanceReviewPage, SourceHealthPage } from './ReviewPages'
@@ -100,12 +100,10 @@ function App() {
       <nav>
         <button className={view === 'desk' ? 'active' : ''} onClick={() => setView('desk')}><LayoutDashboard />研究台</button>
         <button className={view === 'review' ? 'active' : ''} onClick={() => { setView('review'); void refreshReview() }}><CircleGauge />市场复盘</button>
-        <button className="nav-pending" disabled title="建设中"><Search />条件选股<span>建设中</span></button>
         <button className={view === 'deep' ? 'active' : ''} onClick={() => setView('deep')}><BarChart3 />个股深研</button>
         <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refresh() }}><FlaskConical />回测核验</button>
         <button className={view === 'sources' ? 'active' : ''} onClick={() => { setView('sources'); void refreshSourceHealth() }}><Database />数据源状态</button>
         <button className="nav-pending" disabled title="建设中"><BookOpen />研究日志<span>建设中</span></button>
-        <button className="nav-pending" disabled title="建设中"><Bell />达人消息<span>建设中</span></button>
       </nav>
       <div className="nav-foot"><Database />仅本机存储 <span className="status-dot" /></div>
     </aside>

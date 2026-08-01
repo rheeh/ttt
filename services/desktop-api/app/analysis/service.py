@@ -21,6 +21,22 @@ from app.models import QuoteSnapshot, StockPreset, StockSearchResult
 
 class IndividualAnalysisService:
     name = "tencent-qt+tencent-qfq-day"
+    # Warning thresholds are intentionally shorter than the hard cache limits.
+    # Finance is reported by period, so it gets a long safety limit rather than
+    # silently serving an unlimited historical snapshot.
+    FRESHNESS_THRESHOLDS = {
+        "quote": 120,
+        "fund_flow": 86400,
+        "industry": 86400,
+        "news": 86400,
+        "finance": 120 * 86400,
+    }
+    CACHE_MAX_AGE = {
+        "eastmoney-fflow": 3 * 86400,
+        "eastmoney-industry": 3 * 86400,
+        "eastmoney-news": 3 * 86400,
+        "eastmoney-finance": 400 * 86400,
+    }
 
     def __init__(self, pool: StockPool, quote_provider: TencentQuoteProvider | None = None, timeout_seconds: float = 8, cache: Any | None = None):
         self.pool = pool
@@ -90,6 +106,10 @@ class IndividualAnalysisService:
         core_status = "error" if quote.status == "error" or not bars else "degraded" if core_missing else "ok"
         legacy_status = "error" if quote.status == "error" else "degraded" if legacy_missing else "ok"
         deduped_missing = sorted(set(core_missing + enrichment_missing + enrichment_stale))
+        freshness = self._freshness(quote, bars, {
+            "fund_flow": fund_flow, "finance": finance,
+            "industry": industry, "news": news,
+        })
         return AnalysisReport(
             created_at=datetime.now(timezone.utc), stock_code=preset.code,
             stock_name=quote.stock_name or preset.name, sector=preset.sector, asset_type=preset.asset_type,
@@ -108,6 +128,8 @@ class IndividualAnalysisService:
                    "algorithm_version": ZHIXING_ALGORITHM_VERSION, "rule_fingerprint": ZHIXING_RULE_FINGERPRINT},
             fund_flow=fund_flow.model_dump(mode="json"), finance=finance.model_dump(mode="json"),
             industry=industry.model_dump(mode="json"), news=news.model_dump(mode="json"), bars=bars,
+            freshness=freshness,
+            weekly_bars=weekly_bars,
         )
 
     def fetch_supplementary(self, code: str, name: str):
@@ -143,11 +165,70 @@ class IndividualAnalysisService:
                     cached_age = max(0.0, (now - datetime.fromisoformat(cached_at)).total_seconds())
                 except ValueError:
                     cached_age = age
+                max_age = self.CACHE_MAX_AGE.get(result.source)
+                if max_age is not None and cached_age > max_age:
+                    return result.model_copy(update={
+                        "data_age_seconds": round(cached_age, 1),
+                        "cache_expired": True,
+                        "error": f"最近成功缓存已过期（{self._format_age(cached_age)}），未继续使用旧数据",
+                    })
                 return cached_result.model_copy(update={
                     "status": "stale", "cache_used": True, "data_age_seconds": round(cached_age, 1),
                     "error": f"本次请求失败，使用最近成功缓存：{result.error or 'unknown error'}",
                 })
         return result.model_copy(update={"data_age_seconds": round(age, 1)})
+
+    def _freshness(self, quote: Any, bars: list[DailyBar], sources: dict[str, Any]) -> dict[str, dict]:
+        now = datetime.now(timezone.utc)
+        quote_age = max(0.0, (now - quote.fetched_at).total_seconds()) if quote.fetched_at else None
+        result: dict[str, dict] = {
+            "quote": self._freshness_entry("quote", quote.status, quote_age, quote.fetched_at,
+                                            threshold=self.FRESHNESS_THRESHOLDS["quote"],
+                                            trade_at=quote.trade_at),
+            "daily_bars": {
+                "label": "日线",
+                "state": "fresh" if bars else "unknown",
+                "latest_trade_date": bars[-1].trade_date.isoformat() if bars else None,
+                "bar_count": len(bars),
+                "note": "前复权日线" if bars else "暂无日线",
+            },
+        }
+        for key, source in sources.items():
+            result[key] = self._freshness_entry(
+                key, source.status, source.data_age_seconds, source.fetched_at,
+                threshold=self.FRESHNESS_THRESHOLDS[key], cache_used=source.cache_used,
+                cache_expired=source.cache_expired,
+                report_date=getattr(source, "report_date", None),
+                trade_date=getattr(source, "trade_date", None),
+            )
+        return result
+
+    @staticmethod
+    def _freshness_entry(key: str, status: str, age: float | None, fetched_at: datetime | None,
+                         threshold: float, cache_used: bool = False, cache_expired: bool = False,
+                         trade_at: datetime | None = None, report_date: str | None = None,
+                         trade_date: str | None = None) -> dict:
+        if status == "error":
+            state = "expired" if cache_expired else "error"
+        elif status == "stale" or cache_used:
+            state = "stale"
+        elif age is not None and age > threshold:
+            state = "warning"
+        else:
+            state = "fresh"
+        return {
+            "key": key, "state": state, "fetched_at": fetched_at.isoformat() if fetched_at else None,
+            "trade_at": trade_at.isoformat() if trade_at else None, "trade_date": trade_date,
+            "report_date": report_date, "age_seconds": round(age, 1) if age is not None else None,
+            "warning_threshold_seconds": threshold, "cache_used": cache_used,
+            "cache_expired": cache_expired,
+        }
+
+    @staticmethod
+    def _format_age(seconds: float) -> str:
+        if seconds < 3600:
+            return f"{max(1, round(seconds / 60))} 分钟"
+        return f"{seconds / 3600:.1f} 小时"
 
     def resolve(self, value: str) -> StockPreset:
         normalized = value.strip().lower()

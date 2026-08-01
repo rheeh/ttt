@@ -46,7 +46,7 @@ export type AnalysisReport = {
   core_status: 'ok'|'degraded'|'error'; core_missing_fields: string[];
   enrichment_status: 'ok'|'degraded'|'stale'|'error'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
   legacy_score_status: 'ok'|'degraded'|'error'; legacy_missing_fields: string[];
-  quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string};
+  quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string; fetched_at?: string; source?: string; status?: string};
   technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   weekly: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
@@ -54,11 +54,14 @@ export type AnalysisReport = {
   factors: {key: string; label: string; score: number; reason: string; available: boolean; source: string}[];
   radar: {key: string; label: string; score: number; factor_keys: string[]}[];
   trend_series: {trade_date: string; close: number; ma20?: number}[];
+  bars: {trade_date: string; open: number; close: number; high: number; low: number; volume: number}[];
+  weekly_bars: {trade_date: string; open: number; close: number; high: number; low: number; volume: number}[];
   diagnosis: {summary: string; position: string; positive_evidence: string[]; risk_evidence: string[]; conflicts: string[]; reassess_conditions: string[]};
-  fund_flow: {trade_date?: string; main_inflow?: number; main_flow_ratio?: number; small_inflow?: number; medium_inflow?: number; large_inflow?: number; super_inflow?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean};
-  finance: {report_date?: string; revenue?: number; revenue_yoy?: number; profit?: number; profit_yoy?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean};
-  industry: {name?: string; rank?: number; total?: number; change_pct?: number; main_inflow?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean};
-  news: {items: {title: string; snippet: string; source_name: string; published_at: string; url: string; sentiment: 'bull'|'bear'|'neutral'}[]; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean};
+  fund_flow: {trade_date?: string; main_inflow?: number; main_flow_ratio?: number; small_inflow?: number; medium_inflow?: number; large_inflow?: number; super_inflow?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
+  finance: {report_date?: string; revenue?: number; revenue_yoy?: number; profit?: number; profit_yoy?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
+  industry: {name?: string; rank?: number; total?: number; change_pct?: number; main_inflow?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
+  news: {items: {title: string; snippet: string; source_name: string; published_at: string; url: string; sentiment: 'bull'|'bear'|'neutral'}[]; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
+  freshness: Record<string, {key?: string; state: 'fresh'|'warning'|'stale'|'expired'|'error'|'unknown'; fetched_at?: string; trade_at?: string; trade_date?: string; report_date?: string; latest_trade_date?: string; bar_count?: number; note?: string; age_seconds?: number; warning_threshold_seconds?: number; cache_used?: boolean; cache_expired?: boolean}>;
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
 

@@ -62,6 +62,16 @@ def test_source_cache_returns_stale_snapshot(tmp_path):
     assert stale.status == "stale" and stale.cache_used is True and stale.main_flow_ratio == .03
 
 
+def test_source_cache_does_not_use_expired_snapshot(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider(), cache=repo)
+    old = datetime.now(timezone.utc) - timedelta(days=10)
+    cached = FundFlowFacts(trade_date="2026-07-21", main_inflow=1.2, main_flow_ratio=.03, status="ok", fetched_at=old)
+    repo.save_source_cache("sz002432", cached.source, old.isoformat(), cached.model_dump(mode="json"))
+    expired = service._with_cache("sz002432", FundFlowFacts(status="error", error="remote closed"), FundFlowFacts)
+    assert expired.status == "error" and expired.cache_expired is True and expired.main_flow_ratio is None
+
+
 class FakeQuoteProvider:
     def fetch(self, presets):
         now = datetime(2026, 7, 31, 8, tzinfo=timezone.utc)
@@ -104,6 +114,8 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         assert payload["factor_coverage"] == "10/10"
         assert payload["zhixing_confidence"] == 100
         assert payload["raw_score"] == payload["zhixing_index"]
+        assert payload["freshness"]["quote"]["state"] in {"fresh", "warning"}
+        assert payload["freshness"]["daily_bars"]["latest_trade_date"]
         assert len(payload["radar"]) == 6
         assert payload["fund_flow"]["status"] == "ok"
         assert payload["finance"]["revenue_yoy"] == 12

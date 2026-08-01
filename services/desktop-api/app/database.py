@@ -470,7 +470,8 @@ class CandidateRepository:
                                      ("rocket", report.rocket.model_dump()), ("advice", report.advice.model_dump()),
                                      ("fund_flow", report.fund_flow), ("finance", report.finance),
                                      ("industry", report.industry), ("news", report.news),
-                                     ("bars", [bar.model_dump() for bar in report.bars])):
+                                     ("bars", [bar.model_dump() for bar in report.bars]),
+                                     ("weekly_bars", [bar.model_dump() for bar in report.weekly_bars])):
                 source = value.get("source", report.source) if isinstance(value, dict) else report.source
                 fetched_at = value.get("fetched_at", report.created_at.isoformat()) if isinstance(value, dict) else report.created_at.isoformat()
                 connection.execute(
