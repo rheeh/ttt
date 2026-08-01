@@ -25,3 +25,5 @@ def test_health_and_score_api(tmp_path, monkeypatch):
         verification = client.post("/api/candidates/performance/verify")
         assert verification.status_code == 200
         assert verification.json()["processed"] == 0
+        sources = client.get("/api/health/sources")
+        assert sources.status_code == 200 and sources.json()["sources"] == []

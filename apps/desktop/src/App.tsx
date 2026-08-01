@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, BarChart3, Bell, BookOpen, ChevronRight, CircleGauge, Clock3, Database, FlaskConical, LayoutDashboard, Plus, Radar, RefreshCw, Search, Settings, Sparkles } from 'lucide-react'
 import { api } from './api'
 import { DeepResearch } from './DeepResearch'
-import { MarketReviewPage, PerformanceReviewPage } from './ReviewPages'
-import type { Candidate, MarketReview, MarketScan, ScoreInput, ScoreResult } from './types'
+import { MarketReviewPage, PerformanceReviewPage, SourceHealthPage } from './ReviewPages'
+import type { Candidate, DataSourceHealthResponse, MarketReview, MarketReviewRun, MarketScan, PerformanceVerification, ScoreInput, ScoreResult } from './types'
 
 const initial: ScoreInput = {
   stock_code: 'sh603501', stock_name: '韦尔股份', sector: '半导体', price: 103.6,
@@ -31,11 +31,16 @@ function App() {
   const [scanning, setScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState('')
   const [savingScan, setSavingScan] = useState(false)
-  const [view, setView] = useState<'desk' | 'deep' | 'review' | 'performance'>('desk')
+  const [view, setView] = useState<'desk' | 'deep' | 'review' | 'performance' | 'sources'>('desk')
   const [analysisStock, setAnalysisStock] = useState('')
   const [marketReview, setMarketReview] = useState<MarketReview | null>(null)
+  const [reviewRuns, setReviewRuns] = useState<MarketReviewRun[]>([])
+  const [reviewRunId, setReviewRunId] = useState<number | undefined>()
   const [reviewLoading, setReviewLoading] = useState(false)
   const [verifying, setVerifying] = useState(false)
+  const [verification, setVerification] = useState<PerformanceVerification | undefined>()
+  const [sourceHealth, setSourceHealth] = useState<DataSourceHealthResponse | null>(null)
+  const [testingSources, setTestingSources] = useState(false)
   const best = useMemo(() => items.filter(x => x.grade === 'S' || x.grade === 'A').length, [items])
 
   const refresh = () => api.listCandidates().then(x => setItems(x.candidates)).catch(() => setItems([]))
@@ -64,14 +69,29 @@ function App() {
     finally { setSavingScan(false) }
   }
 
-  async function refreshReview() {
+  async function refreshReview(runId?: number) {
     setReviewLoading(true)
-    try { setMarketReview(await api.marketReview()) } catch (error) { setScanMessage(String(error)) } finally { setReviewLoading(false) }
+    try {
+      const runs = await api.marketReviewRuns()
+      setReviewRuns(runs)
+      const selected = runId ?? reviewRunId ?? runs[0]?.run_id
+      setReviewRunId(selected)
+      setMarketReview(await api.marketReview(selected))
+    } catch (error) { setScanMessage(String(error)) } finally { setReviewLoading(false) }
   }
 
   async function verifyPerformance() {
     setVerifying(true)
-    try { await api.verifyPerformance(); await refresh() } catch (error) { setMessage(String(error)) } finally { setVerifying(false) }
+    try { setVerification(await api.verifyPerformance()); await refresh() } catch (error) { setMessage(String(error)) } finally { setVerifying(false) }
+  }
+
+  async function refreshSourceHealth() {
+    try { setSourceHealth(await api.sourceHealth()) } catch (error) { setMessage(String(error)) }
+  }
+
+  async function testSourceHealth() {
+    setTestingSources(true)
+    try { setSourceHealth(await api.testSourceHealth()) } catch (error) { setMessage(String(error)) } finally { setTestingSources(false) }
   }
 
   return <div className="shell">
@@ -83,6 +103,7 @@ function App() {
         <button className="nav-pending" disabled title="建设中"><Search />条件选股<span>建设中</span></button>
         <button className={view === 'deep' ? 'active' : ''} onClick={() => setView('deep')}><BarChart3 />个股深研</button>
         <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refresh() }}><FlaskConical />回测核验</button>
+        <button className={view === 'sources' ? 'active' : ''} onClick={() => { setView('sources'); void refreshSourceHealth() }}><Database />数据源状态</button>
         <button className="nav-pending" disabled title="建设中"><BookOpen />研究日志<span>建设中</span></button>
         <button className="nav-pending" disabled title="建设中"><Bell />达人消息<span>建设中</span></button>
       </nav>
@@ -90,7 +111,7 @@ function App() {
     </aside>
 
     <main>
-      {view === 'deep' ? <DeepResearch initialStock={analysisStock} onBack={() => setView('desk')} /> : view === 'review' ? <MarketReviewPage review={marketReview} loading={reviewLoading} onRefresh={() => void refreshReview()} onOpenStock={code => { setAnalysisStock(code); setView('deep') }} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refresh()} /> : <>
+      {view === 'deep' ? <DeepResearch initialStock={analysisStock} onBack={() => setView('desk')} /> : view === 'review' ? <MarketReviewPage review={marketReview} runs={reviewRuns} selectedRunId={reviewRunId} loading={reviewLoading} onRefresh={runId => void refreshReview(runId)} onOpenStock={code => { setAnalysisStock(code); setView('deep') }} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refresh()} /> : view === 'sources' ? <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} /> : <>
       <header><div><p className="eyebrow">PERSONAL RESEARCH DESK</p><h1>今日研究台</h1><p>把经验规则变成可解释、可保存、可回看的证据。</p></div><button className="icon-btn"><Settings /></button></header>
 
       <section className="stats">
@@ -140,7 +161,7 @@ function App() {
             <span><button className="scan-stock-link" onClick={() => { setAnalysisStock(item.preset.code); setView('deep') }}>{item.quote.stock_name || item.preset.name}</button><small>{item.preset.code}</small></span><span>{item.preset.sector}</span>
             <span>¥{item.quote.price?.toFixed(2) ?? '—'}</span><span className={(item.quote.change_pct ?? 0)>=0?'positive':'negative'}>{item.quote.change_pct != null ? `${item.quote.change_pct>0?'+':''}${item.quote.change_pct.toFixed(2)}%` : '—'}</span>
             <span>{item.quote.pe?.toFixed(1) ?? '—'} / {item.quote.pb?.toFixed(1) ?? '—'}</span><span><strong>{item.score?.total_score ?? '—'}</strong></span>
-            <span className={`data-status ${item.quote.status}`}>{item.quote.status === 'ok' ? '完整' : item.quote.status === 'degraded' ? '已降级' : '失败'}</span>
+            <span className={`data-status ${item.quote.status}`} title={item.quote.fallback_reason ?? item.quote.error}>{item.quote.status === 'ok' ? '完整' : item.quote.status === 'degraded' ? '已降级' : '失败'}</span>
           </div>)}</div>
         </>}
       </section>

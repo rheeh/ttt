@@ -125,6 +125,7 @@ class MarketScanner:
         return quote.model_copy(update={
             "ma5": indicators.ma5, "ma10": indicators.ma10, "ma20": indicators.ma20,
             "history_source": indicators.source, "missing_fields": missing,
+            "fallback_reason": indicators.fallback_reason or quote.fallback_reason,
             "status": "degraded" if missing else "ok",
         })
 

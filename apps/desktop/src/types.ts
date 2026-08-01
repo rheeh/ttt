@@ -22,7 +22,7 @@ export type Candidate = ScoreResult & {
 export type QuoteSnapshot = {
   stock_code: string; stock_name: string; price?: number; change_pct?: number;
   pe?: number; pb?: number; trade_at?: string; fetched_at: string; source: string;
-  status: 'ok'|'degraded'|'error'; missing_fields: string[]; error?: string;
+  status: 'ok'|'degraded'|'error'; missing_fields: string[]; error?: string; fallback_reason?: string;
 }
 export type MarketScanItem = {
   preset: {code: string; name: string; sector: string; asset_type: 'stock'|'etf'};
@@ -35,7 +35,10 @@ export type MarketScan = {
 }
 export type MarketReviewItem = {stock_code: string; stock_name: string; sector: string; price?: number; change_pct?: number; grade?: 'S'|'A'|'B'|'C'; score?: number; status: 'ok'|'degraded'|'error'}
 export type MarketReview = {run_id?: number; as_of?: string; source: string; total: number; succeeded: number; degraded: number; failed: number; scoreable: number; up_count: number; down_count: number; flat_count: number; breadth_pct?: number; average_change_pct?: number; average_score?: number; rotation_pool_codes: string[]; top_gainers: MarketReviewItem[]; top_scores: MarketReviewItem[]; sectors: {sector: string; count: number; average_change_pct?: number; up_count: number; scoreable: number; average_score?: number}[]}
-export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']}
+export type MarketReviewRun = {run_id: number; completed_at: string; source: string; total: number; scoreable: number; average_change_pct?: number}
+export type DataSourceHealth = {source: string; category: string; installed: boolean; accessible: boolean; valid: boolean; status: 'ok'|'degraded'|'error'|'unavailable'; checked_at: string; response_ms?: number; last_success_at?: string; error?: string; details?: string}
+export type DataSourceHealthResponse = {checked_at?: string; sources: DataSourceHealth[]}
+export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number}[]}
 
 export type AnalysisReport = {
   report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string;

@@ -12,11 +12,12 @@ from app.analysis.models import AnalysisReport, AnalysisRequest
 from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
 from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
+from app.market.health import DataSourceHealthService
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    MarketReviewResponse, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
+    DataSourceHealthResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
@@ -103,8 +104,13 @@ def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> Ca
 
 
 @app.get("/api/market/review", response_model=MarketReviewResponse)
-def market_review(request: Request) -> MarketReviewResponse:
-    return candidates(request).market_review()
+def market_review(request: Request, run_id: int | None = Query(default=None, ge=1)) -> MarketReviewResponse:
+    return candidates(request).market_review(run_id=run_id)
+
+
+@app.get("/api/market/review/runs", response_model=list[MarketReviewRun])
+def market_review_runs(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> list[MarketReviewRun]:
+    return candidates(request).list_market_review_runs(limit=limit)
 
 
 @app.get("/api/market/snapshots", response_model=list[QuoteSnapshot])
@@ -171,6 +177,16 @@ def list_analysis(
 def health(request: Request) -> dict[str, str]:
     settings: Settings = request.app.state.settings
     return {"status": "ok", "storage": "local-sqlite", "database": str(settings.database_path)}
+
+
+@app.get("/api/health/sources", response_model=DataSourceHealthResponse)
+def source_health(request: Request) -> DataSourceHealthResponse:
+    return DataSourceHealthResponse(sources=candidates(request).list_source_health())
+
+
+@app.post("/api/health/sources/test", response_model=DataSourceHealthResponse)
+def test_source_health(request: Request) -> DataSourceHealthResponse:
+    return DataSourceHealthService(candidates(request)).test_all()
 
 
 @app.get("/api/strategy")

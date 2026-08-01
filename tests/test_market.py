@@ -73,7 +73,7 @@ def test_akshare_quote_parser_and_fallback():
             return [quote]
 
     merged = FallbackQuoteProvider(Primary(), Backup()).fetch([preset])[0]
-    assert merged.price == 1500 and merged.source == "primary+akshare-spot-em"
+    assert merged.price == 1500 and merged.source == "primary+akshare-spot-em" and merged.fallback_reason
 
 
 def test_history_fallback_replaces_failed_primary():
@@ -162,3 +162,5 @@ def test_market_review_summarizes_latest_scan(tmp_path):
     assert review.run_id == run_id
     assert review.total == 4 and review.up_count == 4
     assert review.top_scores and review.sectors
+    runs = repo.list_market_review_runs()
+    assert runs[0].run_id == run_id and runs[0].average_change_pct == 2.5

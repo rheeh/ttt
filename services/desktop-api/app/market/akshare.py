@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -20,7 +21,7 @@ class AkshareQuoteProvider:
         try:
             import akshare as ak
 
-            rows = ak.stock_zh_a_spot_em().to_dict("records")
+            rows = _retry_call(lambda: ak.stock_zh_a_spot_em(), attempts=2).to_dict("records")
             by_code = {str(row.get("代码") or "").zfill(6): row for row in rows}
         except Exception as exc:  # optional dependency and remote failures are data-source errors
             return [self._error(item, str(exc)) for item in presets]
@@ -95,7 +96,11 @@ class FallbackQuoteProvider:
         missing = [field for field in sorted(set(primary.missing_fields + fallback.missing_fields)) if getattr(primary, field, None) is None and getattr(fallback, field, None) is None]
         price = updates.get("price", primary.price)
         status = "error" if price is None or price <= 0 else "degraded" if missing else "ok"
-        updates.update({"missing_fields": missing, "status": status, "source": f"{primary.source}+{fallback.source}", "error": None if status != "error" else primary.error})
+        updates.update({
+            "missing_fields": missing, "status": status, "source": f"{primary.source}+{fallback.source}",
+            "error": None if status != "error" else primary.error,
+            "fallback_reason": f"主源 {primary.source} 核心字段缺失或失败，已使用 {fallback.source}",
+        })
         return primary.model_copy(update=updates)
 
 
@@ -115,7 +120,7 @@ class AkshareDailyProvider:
         end = date.today().strftime("%Y%m%d")
         for item in presets:
             try:
-                frame = ak.stock_zh_a_hist(symbol=item.code[2:], period="daily", start_date=start, end_date=end, adjust="qfq")
+                frame = _retry_call(lambda: ak.stock_zh_a_hist(symbol=item.code[2:], period="daily", start_date=start, end_date=end, adjust="qfq"), attempts=2)
                 rows = frame.to_dict("records")
                 closes = [float(row["收盘"]) for row in rows if row.get("收盘") not in (None, "-") and float(row["收盘"]) > 0]
                 dates = [str(row.get("日期")) for row in rows if row.get("收盘") not in (None, "-")]
@@ -146,5 +151,20 @@ class FallbackHistoryProvider:
         backup = self.fallback.fetch(missing)
         for item in missing:
             if backup.get(item.code) and backup[item.code].status == "ok":
-                primary[item.code] = backup[item.code]
+                primary[item.code] = backup[item.code].model_copy(update={
+                    "fallback_reason": f"主源 {self.primary.name} 日线失败，已使用 {backup[item.code].source}",
+                })
         return primary
+
+
+def _retry_call(function: Any, attempts: int = 2) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return function()
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(.2 * (attempt + 1))
+    assert last_error is not None
+    raise last_error

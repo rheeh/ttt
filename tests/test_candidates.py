@@ -3,7 +3,7 @@ from pathlib import Path
 from app.database import CandidateRepository
 from datetime import datetime, timezone
 
-from app.models import CandidateCreate, CandidateUpdate, QuoteSnapshot, ScoreInput
+from app.models import CandidateCreate, CandidateUpdate, DataSourceHealth, QuoteSnapshot, ScoreInput
 from app.scoring import StrategyEngine
 
 
@@ -53,3 +53,17 @@ def test_candidate_performance_is_verified_from_later_snapshot(tmp_path):
     verified = next(item for item in outcomes if item.horizon == "1d")
     assert verified.status == "verified"
     assert verified.return_pct == 10.0
+    summary = repo.performance_summary(one_day.due_date)
+    one_day_summary = next(item for item in summary["horizon_summary"] if item.horizon == "1d")
+    assert one_day_summary.verified == 1 and one_day_summary.win_rate_pct == 100
+
+
+def test_source_health_is_persisted(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    checked = datetime.now(timezone.utc)
+    repo.save_source_health(DataSourceHealth(
+        source="fixture", category="test", installed=True, accessible=True, valid=True,
+        status="ok", checked_at=checked, response_ms=12, last_success_at=checked,
+    ))
+    stored = repo.list_source_health()
+    assert stored[0].source == "fixture" and stored[0].response_ms == 12

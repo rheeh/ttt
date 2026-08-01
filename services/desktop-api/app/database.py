@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.analysis.models import AnalysisReport
 from app.models import (
-    CandidateCreate, CandidateItem, CandidateUpdate, MarketReviewResponse, MarketReviewItem, MarketScanResponse, MarketSectorReview,
-    PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
+    CandidateCreate, CandidateItem, CandidateUpdate, DataSourceHealth, MarketReviewResponse, MarketReviewItem, MarketReviewRun, MarketScanResponse, MarketSectorReview,
+    PerformanceHorizonSummary, PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
 )
 
 
@@ -117,6 +117,19 @@ CREATE TABLE IF NOT EXISTS analysis_source_cache (
     PRIMARY KEY(stock_code, source)
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_source_cache_time ON analysis_source_cache(fetched_at DESC);
+CREATE TABLE IF NOT EXISTS data_source_health (
+    source TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    installed INTEGER NOT NULL,
+    accessible INTEGER NOT NULL,
+    valid INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    response_ms INTEGER,
+    last_success_at TEXT,
+    error TEXT,
+    details TEXT
+);
 CREATE TABLE IF NOT EXISTS watchlist_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
@@ -273,9 +286,20 @@ class CandidateRepository:
                 break
         return output
 
-    def market_review(self) -> MarketReviewResponse:
+    def list_market_review_runs(self, limit: int = 30) -> list[MarketReviewRun]:
         with self._connect() as connection:
-            run = connection.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1").fetchone()
+            rows = connection.execute("SELECT * FROM scan_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [MarketReviewRun(
+            run_id=row["id"], completed_at=datetime.fromisoformat(row["completed_at"]), source=row["source"],
+            total=row["total"], scoreable=row["scoreable"], average_change_pct=self._scan_average_change(row["id"]),
+        ) for row in rows]
+
+    def market_review(self, run_id: int | None = None) -> MarketReviewResponse:
+        with self._connect() as connection:
+            run = connection.execute(
+                "SELECT * FROM scan_runs WHERE id = ?" if run_id else "SELECT * FROM scan_runs ORDER BY id DESC LIMIT 1",
+                (run_id,) if run_id else (),
+            ).fetchone()
             if run is None:
                 return MarketReviewResponse()
             rows = connection.execute(
@@ -320,6 +344,41 @@ class CandidateRepository:
             sectors=sector_rows[:12],
         )
 
+    def _scan_average_change(self, run_id: int) -> float | None:
+        with self._connect() as connection:
+            values = [row[0] for row in connection.execute(
+                "SELECT json_extract(quote_json, '$.change_pct') FROM scan_run_items WHERE run_id = ?",
+                (run_id,),
+            ).fetchall() if row[0] is not None]
+        return round(sum(values) / len(values), 2) if values else None
+
+    def save_source_health(self, health: DataSourceHealth) -> DataSourceHealth:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO data_source_health
+                (source, category, installed, accessible, valid, status, checked_at, response_ms, last_success_at, error, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET
+                  category=excluded.category, installed=excluded.installed, accessible=excluded.accessible,
+                  valid=excluded.valid, status=excluded.status, checked_at=excluded.checked_at,
+                  response_ms=excluded.response_ms, last_success_at=COALESCE(excluded.last_success_at, data_source_health.last_success_at),
+                  error=excluded.error, details=excluded.details""",
+                (health.source, health.category, int(health.installed), int(health.accessible), int(health.valid), health.status,
+                 health.checked_at.isoformat(), health.response_ms, health.last_success_at.isoformat() if health.last_success_at else None,
+                 health.error, health.details),
+            )
+        return health
+
+    def list_source_health(self) -> list[DataSourceHealth]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM data_source_health ORDER BY category, source").fetchall()
+        return [DataSourceHealth(
+            source=row["source"], category=row["category"], installed=bool(row["installed"]), accessible=bool(row["accessible"]),
+            valid=bool(row["valid"]), status=row["status"], checked_at=datetime.fromisoformat(row["checked_at"]),
+            response_ms=row["response_ms"], last_success_at=datetime.fromisoformat(row["last_success_at"]) if row["last_success_at"] else None,
+            error=row["error"], details=row["details"],
+        ) for row in rows]
+
     def verify_performance(self, as_of: date) -> list[PerformanceOutcome]:
         now = datetime.now(timezone.utc).isoformat()
         changed: list[PerformanceOutcome] = []
@@ -358,14 +417,29 @@ class CandidateRepository:
                 ))
         return changed
 
-    def performance_summary(self, as_of: date) -> dict[str, int]:
+    def performance_summary(self, as_of: date) -> dict:
         with self._connect() as connection:
             counts = {row["status"]: row["count"] for row in connection.execute(
                 "SELECT status, COUNT(*) AS count FROM candidate_performance GROUP BY status"
             ).fetchall()}
+            horizon_rows = connection.execute(
+                """SELECT horizon,
+                    COUNT(*) AS samples,
+                    SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified,
+                    SUM(CASE WHEN status = 'verified' AND return_pct > 0 THEN 1 ELSE 0 END) AS wins,
+                    AVG(CASE WHEN status = 'verified' THEN return_pct END) AS average_return
+                FROM candidate_performance GROUP BY horizon
+                ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 ELSE 20 END"""
+            ).fetchall()
+        horizon_summary = [PerformanceHorizonSummary(
+            horizon=row["horizon"], samples=row["samples"], verified=row["verified"] or 0, wins=row["wins"] or 0,
+            win_rate_pct=round((row["wins"] or 0) / row["verified"] * 100, 2) if row["verified"] else None,
+            average_return_pct=round(row["average_return"], 4) if row["average_return"] is not None else None,
+        ) for row in horizon_rows]
         return {
             "processed": sum(counts.values()), "verified": counts.get("verified", 0),
             "pending": counts.get("pending", 0), "unavailable": counts.get("unavailable", 0),
+            "horizon_summary": horizon_summary,
         }
 
     def list_performance(self, candidate_id: int) -> list[PerformanceOutcome]:

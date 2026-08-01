@@ -186,6 +186,7 @@ class QuoteSnapshot(BaseModel):
     status: Literal["ok", "degraded", "error"]
     missing_fields: list[str] = Field(default_factory=list)
     error: str | None = None
+    fallback_reason: str | None = None
 
 
 class DailyIndicators(BaseModel):
@@ -198,6 +199,7 @@ class DailyIndicators(BaseModel):
     source: str
     status: Literal["ok", "error"]
     error: str | None = None
+    fallback_reason: str | None = None
 
 
 class PoolResponse(BaseModel):
@@ -274,6 +276,34 @@ class MarketReviewResponse(BaseModel):
     sectors: list[MarketSectorReview] = Field(default_factory=list)
 
 
+class MarketReviewRun(BaseModel):
+    run_id: int
+    completed_at: datetime
+    source: str
+    total: int
+    scoreable: int
+    average_change_pct: float | None = None
+
+
+class DataSourceHealth(BaseModel):
+    source: str
+    category: str
+    installed: bool
+    accessible: bool
+    valid: bool
+    status: Literal["ok", "degraded", "error", "unavailable"]
+    checked_at: datetime
+    response_ms: int | None = None
+    last_success_at: datetime | None = None
+    error: str | None = None
+    details: str | None = None
+
+
+class DataSourceHealthResponse(BaseModel):
+    checked_at: datetime | None = None
+    sources: list[DataSourceHealth] = Field(default_factory=list)
+
+
 class CandidateBatchRequest(BaseModel):
     run_id: int = Field(gt=0)
     limit: int = Field(default=10, ge=1, le=100)
@@ -301,6 +331,15 @@ class PerformanceOutcome(BaseModel):
     note: str | None = None
 
 
+class PerformanceHorizonSummary(BaseModel):
+    horizon: Literal["1d", "5d", "20d"]
+    samples: int
+    verified: int
+    wins: int
+    win_rate_pct: float | None = None
+    average_return_pct: float | None = None
+
+
 class PerformanceVerificationResponse(BaseModel):
     as_of: date
     processed: int
@@ -308,6 +347,7 @@ class PerformanceVerificationResponse(BaseModel):
     pending: int
     unavailable: int
     outcomes: list[PerformanceOutcome]
+    horizon_summary: list[PerformanceHorizonSummary] = Field(default_factory=list)
 
 
 CandidateItem.model_rebuild()

@@ -1,4 +1,4 @@
-import type { AnalysisReport, Candidate, MarketReview, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
+import type { AnalysisReport, Candidate, DataSourceHealthResponse, MarketReview, MarketReviewRun, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -24,8 +24,11 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({run_id: runId, limit, min_grade: 'B'}),
   }).then(parse<{created: number; skipped: number}>),
-  marketReview: () => fetch('/api/market/review').then(parse<MarketReview>),
+  marketReview: (runId?: number) => fetch(`/api/market/review${runId ? `?run_id=${runId}` : ''}`).then(parse<MarketReview>),
+  marketReviewRuns: () => fetch('/api/market/review/runs').then(parse<MarketReviewRun[]>),
   verifyPerformance: () => fetch('/api/candidates/performance/verify', {method: 'POST'}).then(parse<PerformanceVerification>),
+  sourceHealth: () => fetch('/api/health/sources').then(parse<DataSourceHealthResponse>),
+  testSourceHealth: () => fetch('/api/health/sources/test', {method: 'POST'}).then(parse<DataSourceHealthResponse>),
   analyze: (stock: string, isHolding = false, positionCost?: number) => fetch('/api/analysis', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
