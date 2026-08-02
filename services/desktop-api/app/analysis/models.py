@@ -125,6 +125,10 @@ class CompareRequest(BaseModel):
 
 class AnalysisReport(BaseModel):
     report_id: int | None = None
+    trade_date: str | None = None
+    snapshot_reason: Literal["legacy_run", "manual", "meaningful_change", "daily_close"] | None = None
+    snapshot_note: str | None = None
+    content_fingerprint: str | None = None
     created_at: datetime
     stock_code: str
     stock_name: str
@@ -171,3 +175,15 @@ class AnalysisReport(BaseModel):
 class CompareResponse(BaseModel):
     reports: list[AnalysisReport] = Field(default_factory=list)
     errors: dict[str, str] = Field(default_factory=dict)
+
+
+class AnalysisSnapshotRequest(BaseModel):
+    report: AnalysisReport
+    reason: Literal["manual", "meaningful_change", "daily_close"] = "manual"
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class AnalysisSnapshotResponse(BaseModel):
+    report: AnalysisReport
+    saved: bool
+    message: str

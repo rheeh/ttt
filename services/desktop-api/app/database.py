@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -114,7 +115,11 @@ CREATE TABLE IF NOT EXISTS analysis_reports (
     sector TEXT NOT NULL,
     source TEXT NOT NULL,
     status TEXT NOT NULL,
-    payload_json TEXT NOT NULL
+    payload_json TEXT NOT NULL,
+    trade_date TEXT,
+    content_fingerprint TEXT,
+    snapshot_reason TEXT NOT NULL DEFAULT 'legacy_run',
+    snapshot_note TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_reports_code_time ON analysis_reports(stock_code, created_at DESC);
 CREATE TABLE IF NOT EXISTS analysis_facts (
@@ -197,6 +202,17 @@ class CandidateRepository:
             for name, definition in performance_migrations.items():
                 if name not in performance_columns:
                     connection.execute(f"ALTER TABLE candidate_performance ADD COLUMN {name} {definition}")
+            analysis_columns = {row["name"] for row in connection.execute("PRAGMA table_info(analysis_reports)")}
+            analysis_migrations = {
+                "trade_date": "TEXT",
+                "content_fingerprint": "TEXT",
+                "snapshot_reason": "TEXT NOT NULL DEFAULT 'legacy_run'",
+                "snapshot_note": "TEXT",
+            }
+            for name, definition in analysis_migrations.items():
+                if name not in analysis_columns:
+                    connection.execute(f"ALTER TABLE analysis_reports ADD COLUMN {name} {definition}")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_reports_fingerprint ON analysis_reports(content_fingerprint) WHERE content_fingerprint IS NOT NULL")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)
@@ -575,24 +591,50 @@ class CandidateRepository:
         ) for row in rows]
 
     def save_analysis(self, report: AnalysisReport) -> AnalysisReport:
-        payload = report.model_dump_json()
+        """Compatibility wrapper; new callers should use save_snapshot."""
+        return self.save_snapshot(report)[0]
+
+    def save_snapshot(self, report: AnalysisReport, reason: str = "manual", note: str | None = None) -> tuple[AnalysisReport, bool]:
+        trade_date = self._analysis_trade_date(report)
+        fingerprint = self._analysis_fingerprint(report, trade_date)
+        stored = report.model_copy(update={
+            "report_id": None, "trade_date": trade_date, "snapshot_reason": reason, "snapshot_note": note,
+            "content_fingerprint": fingerprint,
+        })
+        payload = stored.model_dump_json()
         with self._connect() as connection:
-            cursor = connection.execute(
-                """INSERT INTO analysis_reports
-                (created_at, stock_code, stock_name, sector, source, status, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (report.created_at.isoformat(), report.stock_code, report.stock_name, report.sector,
-                 report.source, report.status, payload),
-            )
+            existing = connection.execute(
+                "SELECT id, payload_json, trade_date, snapshot_reason, snapshot_note, content_fingerprint FROM analysis_reports WHERE content_fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if existing is not None:
+                return self._analysis_model(existing), False
+            try:
+                cursor = connection.execute(
+                    """INSERT INTO analysis_reports
+                    (created_at, stock_code, stock_name, sector, source, status, payload_json,
+                     trade_date, content_fingerprint, snapshot_reason, snapshot_note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (report.created_at.isoformat(), report.stock_code, report.stock_name, report.sector,
+                     report.source, report.status, payload, trade_date, fingerprint, reason, note),
+                )
+            except sqlite3.IntegrityError:
+                existing = connection.execute(
+                    "SELECT id, payload_json, trade_date, snapshot_reason, snapshot_note, content_fingerprint FROM analysis_reports WHERE content_fingerprint = ?",
+                    (fingerprint,),
+                ).fetchone()
+                if existing is not None:
+                    return self._analysis_model(existing), False
+                raise
             report_id = int(cursor.lastrowid)
             for fact_type, value in (("quote", report.quote), ("technical", report.technical.model_dump()),
-                                     ("rocket", report.rocket.model_dump()), ("advice", report.advice.model_dump()),
-                                     ("fund_flow", report.fund_flow), ("finance", report.finance),
-                                     ("industry", report.industry), ("news", report.news),
-                                     ("bars", [bar.model_dump() for bar in report.bars]),
-                                     ("weekly_bars", [bar.model_dump() for bar in report.weekly_bars])):
-                source = value.get("source", report.source) if isinstance(value, dict) else report.source
-                fetched_at = value.get("fetched_at", report.created_at.isoformat()) if isinstance(value, dict) else report.created_at.isoformat()
+                                     ("rocket", stored.rocket.model_dump()), ("advice", stored.advice.model_dump()),
+                                     ("fund_flow", stored.fund_flow), ("finance", stored.finance),
+                                     ("industry", stored.industry), ("news", stored.news),
+                                     ("bars", [bar.model_dump() for bar in stored.bars]),
+                                     ("weekly_bars", [bar.model_dump() for bar in stored.weekly_bars])):
+                source = value.get("source", stored.source) if isinstance(value, dict) else stored.source
+                fetched_at = value.get("fetched_at", stored.created_at.isoformat()) if isinstance(value, dict) else stored.created_at.isoformat()
                 connection.execute(
                     """INSERT INTO analysis_facts
                     (report_id, fact_type, source, fetched_at, payload_json)
@@ -600,14 +642,14 @@ class CandidateRepository:
                     (report_id, fact_type, source, str(fetched_at),
                      json.dumps(value, ensure_ascii=False, default=str)),
                 )
-        return report.model_copy(update={"report_id": report_id})
+        return stored.model_copy(update={"report_id": report_id}), True
 
     def get_analysis(self, report_id: int) -> AnalysisReport:
         with self._connect() as connection:
-            row = connection.execute("SELECT payload_json FROM analysis_reports WHERE id = ?", (report_id,)).fetchone()
+            row = connection.execute("SELECT id, payload_json, trade_date, snapshot_reason, snapshot_note, content_fingerprint FROM analysis_reports WHERE id = ?", (report_id,)).fetchone()
         if row is None:
             raise KeyError(report_id)
-        return AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": report_id})
+        return self._analysis_model(row)
 
     def save_source_cache(self, stock_code: str, source: str, fetched_at: str, payload: dict) -> None:
         with self._connect() as connection:
@@ -630,16 +672,54 @@ class CandidateRepository:
         return str(row["fetched_at"]), json.loads(row["payload_json"])
 
     def list_analyses(self, stock_code: str | None = None, limit: int = 50) -> list[AnalysisReport]:
-        query = "SELECT id, payload_json FROM analysis_reports"
-        params: list[object] = []
+        params: list[object] = [stock_code] if stock_code else []
         if stock_code:
-            query += " WHERE stock_code = ?"
-            params.append(stock_code)
-        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+            query = "SELECT id, payload_json, trade_date, snapshot_reason, snapshot_note, content_fingerprint FROM analysis_reports WHERE stock_code = ? ORDER BY created_at DESC, id DESC LIMIT ?"
+        else:
+            query = """SELECT id, payload_json, trade_date, snapshot_reason, snapshot_note, content_fingerprint
+                       FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY stock_code ORDER BY created_at DESC, id DESC) AS latest_rank
+                             FROM analysis_reports)
+                       WHERE latest_rank = 1 ORDER BY created_at DESC, id DESC LIMIT ?"""
         params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
-        return [AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={"report_id": row["id"]}) for row in rows]
+        return [self._analysis_model(row) for row in rows]
+
+    @staticmethod
+    def _analysis_model(row: sqlite3.Row) -> AnalysisReport:
+        return AnalysisReport.model_validate_json(row["payload_json"]).model_copy(update={
+            "report_id": row["id"], "trade_date": row["trade_date"], "snapshot_reason": row["snapshot_reason"],
+            "snapshot_note": row["snapshot_note"], "content_fingerprint": row["content_fingerprint"],
+        })
+
+    @staticmethod
+    def _analysis_trade_date(report: AnalysisReport) -> str | None:
+        raw = report.quote.get("trade_at") or report.technical.latest_trade_date
+        return str(raw)[:10] if raw else None
+
+    @classmethod
+    def _analysis_fingerprint(cls, report: AnalysisReport, trade_date: str | None) -> str:
+        request_input = report.facts.get("input", {}) if isinstance(report.facts, dict) else {}
+        position_cost = request_input.get("position_cost")
+        context = {
+            "is_holding": bool(request_input.get("is_holding", False)),
+            "position_cost": round(float(position_cost), 4) if position_cost is not None else None,
+        }
+        conclusion = {
+            "action": report.advice.action,
+            "category": report.advice.category,
+            "position": report.diagnosis.position,
+            "level": report.zhixing_level,
+            "score_bucket": round(report.zhixing_index / 5) * 5,
+            "invalidation": sorted(report.advice.invalidation_conditions),
+        }
+        payload = {
+            "stock_code": report.stock_code, "trade_date": trade_date,
+            "algorithm_version": report.algorithm_version, "rule_fingerprint": report.rule_fingerprint,
+            "context": context, "conclusion": conclusion,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def add_watchlist(self, request: WatchlistCreate, source: str = "user-search") -> WatchlistItem:
         added_at = datetime.now(timezone.utc)

@@ -1,4 +1,4 @@
-import type { AnalysisReport, Candidate, CompareResponse, DataSourceHealthResponse, IndustryRadar, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
+import type { AnalysisReport, AnalysisSnapshotResponse, Candidate, CompareResponse, DataSourceHealthResponse, IndustryRadar, MarketScan, PerformanceVerification, ScoreInput, ScoreResult, StockSearchResult, WatchlistItem } from './types'
 
 async function parse<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -32,6 +32,10 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({stock, is_holding: isHolding, position_cost: positionCost || undefined}),
   }).then(parse<AnalysisReport>),
+  saveAnalysisSnapshot: (report: AnalysisReport, note?: string) => fetch('/api/analysis/snapshots', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({report, reason: 'manual', note}),
+  }).then(parse<AnalysisSnapshotResponse>),
   compareStocks: (stocks: string[]) => fetch('/api/analysis/compare', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stocks}),
   }).then(parse<CompareResponse>),

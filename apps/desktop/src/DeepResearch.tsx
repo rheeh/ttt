@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ArrowLeft, BrainCircuit, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, BookmarkPlus, BrainCircuit, RefreshCw } from 'lucide-react'
 import { api } from './api'
 import type { AnalysisReport, StockSearchResult, WatchlistItem } from './types'
 
 type Props = { initialStock?: string; onBack?: () => void }
 
 type ChartBar = AnalysisReport['bars'][number]
+
+function snapshotReasonLabel(reason?: AnalysisReport['snapshot_reason']) {
+  return reason === 'manual' ? '用户手动保存' : reason === 'meaningful_change' ? '信号变化' : reason === 'daily_close' ? '收盘快照' : '旧运行记录'
+}
 
 function KlineChart({bars, range, support, resistance, history, stockCode}: {bars: ChartBar[]; range: number; support?: number; resistance?: number; history: AnalysisReport[]; stockCode: string}) {
   if (!bars.length) return <div className="chart-empty">暂无 K 线数据</div>
@@ -85,6 +89,8 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   const [searchResults, setSearchResults] = useState<StockSearchResult[]>([])
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   const [history, setHistory] = useState<AnalysisReport[]>([])
+  const [timeline, setTimeline] = useState<AnalysisReport[]>([])
+  const [saveMessage, setSaveMessage] = useState('')
   const [suggestions, setSuggestions] = useState<StockSearchResult[]>([])
   const [suggesting, setSuggesting] = useState(false)
   const [searching, setSearching] = useState(false)
@@ -92,6 +98,10 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   const [chartRange, setChartRange] = useState(120)
   const skipNextSuggestion = useRef(false)
   useEffect(() => { void api.listWatchlist().then(setWatchlist).catch(() => setWatchlist([])); void api.listAnalyses(undefined, 12).then(setHistory).catch(() => setHistory([])) }, [])
+  useEffect(() => {
+    if (!report?.stock_code) return
+    void api.listAnalyses(report.stock_code, 20).then(setTimeline).catch(() => setTimeline([]))
+  }, [report?.stock_code])
   useEffect(() => {
     const query = stock.trim()
     if (skipNextSuggestion.current) { skipNextSuggestion.current = false; return }
@@ -107,9 +117,20 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   }, [stock])
   async function run() {
     setBusy(true); setError('')
-    try { const next = await api.analyze(stock, holding, cost ? Number(cost) : undefined); setReport(next); setHistory(current => [next, ...current.filter(item => item.report_id !== next.report_id)].slice(0, 12)) }
+    try { const next = await api.analyze(stock, holding, cost ? Number(cost) : undefined); setReport(next); setSaveMessage('') }
     catch (reason) { setError(String(reason)) }
     finally { setBusy(false) }
+  }
+  async function saveSnapshot() {
+    if (!report) return
+    setError(''); setSaveMessage('正在保存…')
+    try {
+      const result = await api.saveAnalysisSnapshot(report)
+      setReport(result.report)
+      setSaveMessage(result.message)
+      setHistory(await api.listAnalyses(undefined, 12))
+      setTimeline(await api.listAnalyses(report.stock_code, 20))
+    } catch (reason) { setError(String(reason)); setSaveMessage('') }
   }
   async function search() {
     setSearching(true); setError('')
@@ -120,6 +141,10 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
   async function add(item: StockSearchResult) {
     try { const saved = await api.addWatchlist(item); setWatchlist(current => [saved, ...current.filter(entry => entry.code !== saved.code)]); setStock(item.code) }
     catch (reason) { setError(String(reason)) }
+  }
+  async function addCurrentToWatchlist() {
+    if (!report) return
+    await add({code: report.stock_code, name: report.stock_name, market: report.sector, asset_type: report.asset_type, source: 'analysis'})
   }
   function chooseSuggestion(item: StockSearchResult) {
     if (item.code !== stock.trim()) skipNextSuggestion.current = true
@@ -136,9 +161,10 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
       <div className="watchlist-strip"><span>我的自选</span>{watchlist.length === 0 ? <small>搜索股票后加入自己的观察列表</small> : watchlist.map(item => <button key={item.code} onClick={() => setStock(item.code)}>{item.name}<small>{item.code}</small></button>)}</div>
       {error && <p className="scan-error"><AlertTriangle />{error}</p>}
     </section>
-    {history.length > 0 && <section className="panel history-panel"><div className="panel-title"><div><span className="step">04</span><h2>历史分析报告</h2></div><span className="pill">本机 SQLite</span></div><div className="history-list">{history.map(item => <button key={item.report_id} onClick={() => item.report_id && void api.getAnalysis(item.report_id).then(setReport).catch(reason => setError(String(reason)))}><span><strong>{item.stock_name}</strong><small>{item.stock_code} · {new Date(item.created_at).toLocaleString('zh-CN')}</small></span><b>{item.zhixing_index.toFixed(0)}</b><em className={`history-status ${item.enrichment_status}`}>{item.enrichment_status === 'not_applicable' ? '不适用' : item.enrichment_status === 'stale' ? '缓存' : item.enrichment_status === 'ok' ? '完整' : '降级'}</em></button>)}</div></section>}
+    {history.length > 0 && <section className="panel history-panel"><div className="panel-title"><div><span className="step">04</span><h2>最近研究</h2><small>每只股票只展示最新一条；进入当前股票后查看完整时间线。</small></div><span className="pill">按股票归并</span></div><div className="history-list">{history.map(item => <button key={item.report_id} onClick={() => item.report_id && void api.getAnalysis(item.report_id).then(setReport).catch(reason => setError(String(reason)))}><span><strong>{item.stock_name}</strong><small>{item.stock_code} · {item.trade_date ?? new Date(item.created_at).toLocaleDateString('zh-CN')} · {snapshotReasonLabel(item.snapshot_reason)}</small></span><b>{item.zhixing_index.toFixed(0)}</b><em className={`history-status ${item.enrichment_status}`}>{item.enrichment_status === 'not_applicable' ? '不适用' : item.enrichment_status === 'stale' ? '缓存' : item.enrichment_status === 'ok' ? '完整' : '降级'}</em></button>)}</div></section>}
     {!report ? <section className="panel deep-empty"><BrainCircuit /><h2>输入一只股票开始分析</h2><p>首版使用腾讯实时行情和前复权日线，缺失的资金、财务、板块和新闻字段会明确标注。</p></section> : <>
-      <section className="deep-hero"><div><div className="status-row"><span className={`data-status ${report.core_status}`}>{report.core_status === 'ok' ? '核心数据完整' : report.core_status === 'degraded' ? '核心数据部分降级' : '核心数据失败'}</span><span className={`data-status ${report.enrichment_status}`}>{report.asset_type === 'etf' ? 'ETF专用趋势口径' : report.enrichment_status === 'ok' ? '增强数据完整' : report.enrichment_status === 'stale' ? '增强数据使用缓存' : report.enrichment_status === 'degraded' ? '增强数据部分缺失' : '增强数据失败'}</span></div><h2>{report.stock_name}<small>{report.stock_code} · {report.asset_type === 'etf' ? 'ETF' : report.sector}</small></h2><p>{report.diagnosis.summary}</p></div><div className="rocket-score"><strong>{report.zhixing_index.toFixed(0)}</strong><span>知行指数 · {report.zhixing_level}</span><small>覆盖 {report.factor_coverage} · 可信度 {report.zhixing_confidence.toFixed(0)}%</small></div></section>
+      <section className="deep-hero"><div><div className="status-row"><span className={`data-status ${report.core_status}`}>{report.core_status === 'ok' ? '核心数据完整' : report.core_status === 'degraded' ? '核心数据部分降级' : '核心数据失败'}</span><span className={`data-status ${report.enrichment_status}`}>{report.asset_type === 'etf' ? 'ETF专用趋势口径' : report.enrichment_status === 'not_applicable' ? '增强数据不适用' : report.enrichment_status === 'ok' ? '增强数据完整' : report.enrichment_status === 'stale' ? '增强数据使用缓存' : report.enrichment_status === 'degraded' ? '增强数据部分缺失' : '增强数据失败'}</span></div><h2>{report.stock_name}<small>{report.stock_code} · {report.asset_type === 'etf' ? 'ETF' : report.sector}</small></h2><p>{report.diagnosis.summary}</p></div><div className="rocket-score"><strong>{report.zhixing_index.toFixed(0)}</strong><span>知行指数 · {report.zhixing_level}</span><small>覆盖 {report.factor_coverage} · 可信度 {report.zhixing_confidence.toFixed(0)}%</small><div className="research-actions"><button className="scan-button" onClick={() => void saveSnapshot()}><BookmarkPlus />保存研究快照</button><button className="ghost-button" onClick={() => void addCurrentToWatchlist()}>加入自选</button></div>{saveMessage && <em className="save-message">{saveMessage}</em>}</div></section>
+      {report && <section className="panel research-timeline"><div className="panel-title"><div><h2>研究时间线</h2><small>只记录手动保存或历史遗留快照；重复分析不会自动新增记录。</small></div><span className="pill">{timeline.length} 条</span></div>{timeline.length === 0 ? <p className="source-note">尚未保存研究快照。当前分析仅供查看，不会自动写入历史。</p> : <div className="timeline-list">{timeline.map((item, index) => { const previous = timeline[index + 1]; const delta = previous ? item.zhixing_index - previous.zhixing_index : null; const transition = previous ? `${previous.advice.action} → ${item.advice.action}` : '首次保存'; return <article className="timeline-item" key={item.report_id}><div><strong>{item.trade_date ?? new Date(item.created_at).toLocaleDateString('zh-CN')}</strong><small>{new Date(item.created_at).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}</small></div><div><b>{previous && delta != null ? `${previous.zhixing_index.toFixed(0)} → ${item.zhixing_index.toFixed(0)}` : item.zhixing_index.toFixed(0)}</b><span>{transition}</span></div><em>{snapshotReasonLabel(item.snapshot_reason)}</em></article> })}</div>}</section>}
       <section className="diagnosis-banner"><strong>{report.diagnosis.position}</strong><span>{report.diagnosis.summary}</span>{report.diagnosis.conflicts.length > 0 && <em>存在日周线矛盾</em>}</section>
       <TechnicalGuide />
       <section className="panel freshness-panel"><div className="panel-title"><div><h2>数据新鲜度</h2><small>行情优先看交易日；抓取时间只表示本机何时取得数据。黄色表示交易日落后或超过类别阈值。</small></div><span className="pill">交易日 + 抓取时间</span></div><div className="freshness-grid"><FreshnessItem label="行情" info={report.freshness?.quote} fallback={report.quote.fetched_at ? `抓取于 ${new Date(report.quote.fetched_at).toLocaleTimeString('zh-CN')}` : undefined} /><FreshnessItem label="日线" info={report.freshness?.daily_bars} /><FreshnessItem label="资金流" info={report.freshness?.fund_flow} /><FreshnessItem label="财务" info={report.freshness?.finance} /><FreshnessItem label="行业" info={report.freshness?.industry} /><FreshnessItem label="新闻" info={report.freshness?.news} /></div></section>
@@ -148,7 +174,7 @@ export function DeepResearch({ initialStock = '', onBack }: Props) {
         <article className="panel source-panel"><div className="panel-title"><h2>行业热度</h2><SourceBadge status={report.industry.status} source={report.industry.source} endpoint={report.industry.endpoint} cacheExpired={report.industry.cache_expired} error={report.industry.error} /></div><div className="source-metrics"><div><span>行业</span><strong>{report.industry.name ?? '—'}</strong></div><div><span>涨幅排名</span><strong>{report.industry.rank != null ? `${report.industry.rank} / ${report.industry.total ?? '—'}` : '—'}</strong></div><div><span>行业涨幅</span><NumberValue value={report.industry.change_pct} suffix="%" /></div></div><small className="source-note">{report.industry.constituent_count != null ? `成分 ${report.industry.constituent_count} · 上涨 ${report.industry.up_count ?? 0} / 下跌 ${report.industry.down_count ?? 0} · 领涨 ${report.industry.leader_name ?? '—'}` : '按行业涨幅横截面排序'}<DataAge seconds={report.industry.data_age_seconds} status={report.industry.status} cacheUsed={report.industry.cache_used} />{report.industry.error ? ` · ${report.industry.error}` : ''}</small></article>
         <article className="panel source-panel news-panel"><div className="panel-title"><h2>相关新闻</h2><div><SourceBadge status={report.news.status} source={report.news.source} cacheExpired={report.news.cache_expired} error={report.news.error} /><small className="source-note"><DataAge seconds={report.news.data_age_seconds} status={report.news.status} cacheUsed={report.news.cache_used} /></small></div></div>{report.news.items.length === 0 ? <p className="source-note">暂无可用新闻{report.news.error ? ` · ${report.news.error}` : ''}</p> : <div className="news-list">{report.news.items.slice(0, 4).map((item, index) => <a href={item.url || undefined} target="_blank" rel="noreferrer" key={`${item.title}-${index}`}><span className={`news-sentiment ${item.sentiment}`}>{item.sentiment === 'bull' ? '利好' : item.sentiment === 'bear' ? '风险' : '中性'}</span><strong>{item.title}</strong><small>{item.source_name || '公开资讯'} · {item.published_at || '时间未知'}</small></a>)}</div>}</article>
       </section>
-      <div className="deep-grid"><section className="panel chart-panel kline-panel"><div className="panel-title"><div><h2>{chartMode === 'daily' ? '日线 K 线' : '周线 K 线'}</h2><small>腾讯前复权 · 成交量 · 支撑/压力 · 历史评分</small></div><div className="chart-toolbar"><div>{(['daily', 'weekly'] as const).map(mode => <button type="button" className={chartMode === mode ? 'active' : ''} key={mode} onClick={() => { setChartMode(mode); setChartRange(mode === 'daily' ? 120 : 52) }}>{mode === 'daily' ? '日线' : '周线'}</button>)}</div><div>{(chartMode === 'daily' ? [60, 120, 252] : [26, 52, 104]).map(value => <button type="button" className={chartRange === value ? 'active' : ''} key={value} onClick={() => setChartRange(value)}>{value === 252 || value === 104 ? '全部' : value}{value === 252 || value === 104 ? '' : chartMode === 'daily' ? '日' : '周'}</button>)}</div></div></div><KlineChart bars={chartMode === 'daily' ? report.bars : report.weekly_bars} range={chartRange} support={report.technical.support20} resistance={report.technical.resistance20} history={history} stockCode={report.stock_code} /></section><section className="panel chart-panel"><div className="panel-title"><h2>六维雷达</h2><span className="pill">0–100</span></div><RadarChart dimensions={report.radar} /></section></div>
+      <div className="deep-grid"><section className="panel chart-panel kline-panel"><div className="panel-title"><div><h2>{chartMode === 'daily' ? '日线 K 线' : '周线 K 线'}</h2><small>腾讯前复权 · 成交量 · 支撑/压力 · 历史评分</small></div><div className="chart-toolbar"><div>{(['daily', 'weekly'] as const).map(mode => <button type="button" className={chartMode === mode ? 'active' : ''} key={mode} onClick={() => { setChartMode(mode); setChartRange(mode === 'daily' ? 120 : 52) }}>{mode === 'daily' ? '日线' : '周线'}</button>)}</div><div>{(chartMode === 'daily' ? [60, 120, 252] : [26, 52, 104]).map(value => <button type="button" className={chartRange === value ? 'active' : ''} key={value} onClick={() => setChartRange(value)}>{value === 252 || value === 104 ? '全部' : value}{value === 252 || value === 104 ? '' : chartMode === 'daily' ? '日' : '周'}</button>)}</div></div></div><KlineChart bars={chartMode === 'daily' ? report.bars : report.weekly_bars} range={chartRange} support={report.technical.support20} resistance={report.technical.resistance20} history={timeline} stockCode={report.stock_code} /></section><section className="panel chart-panel"><div className="panel-title"><h2>六维雷达</h2><span className="pill">0–100</span></div><RadarChart dimensions={report.radar} /></section></div>
       <div className="deep-grid"><section className="panel"><div className="panel-title"><h2>行情与日周线</h2><span className="pill">日线 {report.technical.trend} · 周线 {report.weekly.trend}</span></div><div className="metric-grid">{[['现价', report.quote.price], ['涨跌', report.quote.change_pct != null ? `${report.quote.change_pct.toFixed(2)}%` : null], ['PE', report.quote.pe], ['MA5', report.technical.ma5], ['MA20', report.technical.ma20], ['MA60', report.technical.ma60], ['周MA5', report.weekly.ma5], ['RSI14', report.technical.rsi14], ['量比', report.technical.volume_ratio], ['20日下沿', report.technical.support20], ['20日上沿', report.technical.resistance20]].map(([label, value]) => <div key={label as string}><span>{label}</span><strong>{typeof value === 'number' ? value.toFixed(2) : value ?? '—'}</strong></div>)}</div>{report.technical.macd && <p className="signal-line">MACD：{report.technical.macd.golden_cross ? '金叉' : report.technical.macd.death_cross ? '死叉' : report.technical.macd.hist > 0 ? '多头' : '空头'} · DIF {report.technical.macd.dif.toFixed(3)} · DEA {report.technical.macd.dea.toFixed(3)}</p>}</section>
         <section className="panel"><div className="panel-title"><h2>十因子评分</h2><span className="pill">{report.factor_coverage} 可用 · 算法 {report.algorithm_version}</span></div><div className="rocket-dimensions">{report.factors.map(factor => <article key={factor.key}><div><span>{factor.label}</span><strong className={factor.score >= 60 ? 'positive' : factor.score < 40 ? 'negative' : ''}>{factor.score.toFixed(0)}</strong></div><small>{factor.reason}{factor.available ? '' : ' · 缺失按中性 50 计入'}</small></article>)}</div></section>
       </div>

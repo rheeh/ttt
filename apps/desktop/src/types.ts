@@ -41,7 +41,7 @@ export type DataSourceHealthResponse = {checked_at?: string; sources: DataSource
 export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number; median_return_pct?: number; benchmark_code?: string; average_relative_return_pct?: number}[]}
 
 export type AnalysisReport = {
-  report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string; asset_type: 'stock'|'etf';
+  report_id?: number; trade_date?: string; snapshot_reason?: 'legacy_run'|'manual'|'meaningful_change'|'daily_close'; snapshot_note?: string; content_fingerprint?: string; created_at: string; stock_code: string; stock_name: string; sector: string; asset_type: 'stock'|'etf';
   source: string; status: 'ok'|'degraded'|'error'; missing_fields: string[];
   core_status: 'ok'|'degraded'|'error'; core_missing_fields: string[];
   enrichment_status: 'ok'|'degraded'|'stale'|'error'|'not_applicable'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
@@ -66,6 +66,7 @@ export type AnalysisReport = {
 }
 
 export type CompareResponse = {reports: AnalysisReport[]; errors: Record<string, string>}
+export type AnalysisSnapshotResponse = {report: AnalysisReport; saved: boolean; message: string}
 
 export type StockSearchResult = {code: string; name: string; market?: string; asset_type: 'stock'|'etf'; source: string}
 export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}

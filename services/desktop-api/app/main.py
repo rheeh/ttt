@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import CandidateRepository
-from app.analysis.models import AnalysisReport, AnalysisRequest, CompareRequest, CompareResponse
+from app.analysis.models import AnalysisReport, AnalysisRequest, AnalysisSnapshotRequest, AnalysisSnapshotResponse, CompareRequest, CompareResponse
 from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
 from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
@@ -144,7 +144,7 @@ def analyze_stock(payload: AnalysisRequest, request: Request) -> AnalysisReport:
         report = analysis_service(request).analyze(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return candidates(request).save_analysis(report)
+    return report
 
 
 @app.post("/api/analysis/compare", response_model=CompareResponse)
@@ -158,7 +158,7 @@ def compare_stocks(payload: CompareRequest, request: Request) -> CompareResponse
 
     def analyze_one(stock: str) -> AnalysisReport:
         report = analysis_service(request).analyze(AnalysisRequest(stock=stock))
-        return candidates(request).save_analysis(report)
+        return report
 
     with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
         pending = {executor.submit(analyze_one, stock): stock for stock in stocks}
@@ -174,6 +174,15 @@ def compare_stocks(payload: CompareRequest, request: Request) -> CompareResponse
     if not reports:
         raise HTTPException(status_code=422, detail={"message": "没有成功获取可对比的股票", "errors": errors})
     return CompareResponse(reports=reports, errors=errors)
+
+
+@app.post("/api/analysis/snapshots", response_model=AnalysisSnapshotResponse)
+def save_analysis_snapshot(payload: AnalysisSnapshotRequest, request: Request) -> AnalysisSnapshotResponse:
+    report, saved = candidates(request).save_snapshot(payload.report, reason=payload.reason, note=payload.note)
+    return AnalysisSnapshotResponse(
+        report=report, saved=saved,
+        message="研究快照已保存" if saved else "同一股票、交易日和结论已存在，未重复保存",
+    )
 
 
 @app.get("/api/stocks/search", response_model=list[StockSearchResult])

@@ -188,7 +188,7 @@ class FakeAnalysisService(IndividualAnalysisService):
         )
 
 
-def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
+def test_analysis_api_returns_without_saving_and_explicit_snapshot_is_deduplicated(tmp_path, monkeypatch):
     monkeypatch.setenv("STOCK_RESEARCH_DATA_DIR", str(tmp_path))
     with TestClient(app) as client:
         client.app.state.analysis_service = FakeAnalysisService(
@@ -197,7 +197,7 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         response = client.post("/api/analysis", json={"stock": "600519"})
         assert response.status_code == 200
         payload = response.json()
-        assert payload["report_id"] == 1
+        assert payload["report_id"] is None
         assert payload["technical"]["ma20"] is not None
         assert payload["rocket"]["dimensions"] and payload["status"] == "ok"
         assert payload["core_status"] == "ok"
@@ -216,13 +216,22 @@ def test_analysis_api_saves_report_snapshot(tmp_path, monkeypatch):
         assert payload["news"]["items"][0]["sentiment"] == "bull"
         assert payload["weekly"]["bar_count"] > 0
         assert payload["diagnosis"]["summary"]
-        stored = client.get(f"/api/analysis/{payload['report_id']}")
+        assert client.get("/api/analysis?limit=5").json() == []
+        saved = client.post("/api/analysis/snapshots", json={"report": payload})
+        assert saved.status_code == 200 and saved.json()["saved"] is True
+        saved_payload = saved.json()["report"]
+        assert saved_payload["report_id"] == 1
+        assert saved_payload["snapshot_reason"] == "manual"
+        stored = client.get(f"/api/analysis/{saved_payload['report_id']}")
         assert stored.status_code == 200
         assert stored.json()["stock_code"] == "sh600519"
         history = client.get("/api/analysis?limit=5")
-        assert history.status_code == 200 and history.json()[0]["report_id"] == payload["report_id"]
+        assert history.status_code == 200 and history.json()[0]["report_id"] == saved_payload["report_id"]
+        duplicate = client.post("/api/analysis/snapshots", json={"report": payload})
+        assert duplicate.status_code == 200 and duplicate.json()["saved"] is False
+        assert client.get("/api/analysis?limit=5").json().__len__() == 1
         with client.app.state.candidates._connect() as connection:
-            fact_types = {row[0] for row in connection.execute("SELECT fact_type FROM analysis_facts WHERE report_id = ?", (payload["report_id"],))}
+            fact_types = {row[0] for row in connection.execute("SELECT fact_type FROM analysis_facts WHERE report_id = ?", (saved_payload["report_id"],))}
         assert {"fund_flow", "finance", "industry", "news"}.issubset(fact_types)
 
 
@@ -236,6 +245,7 @@ def test_compare_api_analyzes_two_stocks_in_parallel(tmp_path, monkeypatch):
         assert len(payload["reports"]) == 2
         assert payload["errors"] == {}
         assert {item["stock_code"] for item in payload["reports"]} == {"sh603501", "sz002371"}
+        assert client.get("/api/analysis?limit=5").json() == []
 
 
 def test_etf_uses_trend_model_without_stock_finance_or_industry(tmp_path, monkeypatch):
