@@ -135,7 +135,7 @@ class AnalysisReport(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     core_status: Literal["ok", "degraded", "error"] = "degraded"
     core_missing_fields: list[str] = Field(default_factory=list)
-    enrichment_status: Literal["ok", "degraded", "stale", "error"] = "degraded"
+    enrichment_status: Literal["ok", "degraded", "stale", "error", "not_applicable"] = "degraded"
     enrichment_missing_fields: list[str] = Field(default_factory=list)
     enrichment_stale_fields: list[str] = Field(default_factory=list)
     legacy_score_status: Literal["ok", "degraded", "error"] = "degraded"

@@ -431,7 +431,13 @@ class PerformanceOutcome(BaseModel):
     due_date: date
     baseline_price: float
     realized_price: float | None = None
+    realized_trade_date: date | None = None
     return_pct: float | None = None
+    benchmark_code: str | None = None
+    benchmark_baseline_price: float | None = None
+    benchmark_realized_price: float | None = None
+    benchmark_return_pct: float | None = None
+    relative_return_pct: float | None = None
     status: Literal["pending", "verified", "unavailable"]
     measured_at: datetime | None = None
     source: str | None = None
@@ -445,6 +451,9 @@ class PerformanceHorizonSummary(BaseModel):
     wins: int
     win_rate_pct: float | None = None
     average_return_pct: float | None = None
+    median_return_pct: float | None = None
+    benchmark_code: str | None = None
+    average_relative_return_pct: float | None = None
 
 
 class PerformanceVerificationResponse(BaseModel):

@@ -16,7 +16,7 @@ export type ScoreResult = {
 export type Candidate = ScoreResult & {
   id: number; selected_at: string; selected_price: number; status: string;
   source_name: string; reasons: string[]; note?: string;
-  performance?: {candidate_id: number; horizon: '1d'|'5d'|'20d'; status: 'pending'|'verified'|'unavailable'; due_date: string; baseline_price: number; realized_price?: number; return_pct?: number; measured_at?: string; source?: string; note?: string}[];
+  performance?: {candidate_id: number; horizon: '1d'|'5d'|'20d'; status: 'pending'|'verified'|'unavailable'; due_date: string; baseline_price: number; realized_price?: number; realized_trade_date?: string; return_pct?: number; benchmark_code?: string; benchmark_return_pct?: number; relative_return_pct?: number; measured_at?: string; source?: string; note?: string}[];
 }
 
 export type QuoteSnapshot = {
@@ -38,13 +38,13 @@ export type MarketReview = {run_id?: number; as_of?: string; source: string; tot
 export type MarketReviewRun = {run_id: number; completed_at: string; source: string; total: number; scoreable: number; average_change_pct?: number; scope: 'reference_pool'|'all_a_market'; pool_name: string; pool_version: string; pool_component_count: number; transaction_date?: string; coverage_pct?: number; data_status: 'ok'|'degraded'|'error'}
 export type DataSourceHealth = {source: string; category: string; installed: boolean; accessible: boolean; valid: boolean; status: 'ok'|'degraded'|'error'|'unavailable'; checked_at: string; response_ms?: number; last_success_at?: string; error?: string; details?: string}
 export type DataSourceHealthResponse = {checked_at?: string; sources: DataSourceHealth[]}
-export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number}[]}
+export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number; median_return_pct?: number; benchmark_code?: string; average_relative_return_pct?: number}[]}
 
 export type AnalysisReport = {
-  report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string;
+  report_id?: number; created_at: string; stock_code: string; stock_name: string; sector: string; asset_type: 'stock'|'etf';
   source: string; status: 'ok'|'degraded'|'error'; missing_fields: string[];
   core_status: 'ok'|'degraded'|'error'; core_missing_fields: string[];
-  enrichment_status: 'ok'|'degraded'|'stale'|'error'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
+  enrichment_status: 'ok'|'degraded'|'stale'|'error'|'not_applicable'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
   legacy_score_status: 'ok'|'degraded'|'error'; legacy_missing_fields: string[];
   quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string; fetched_at?: string; source?: string; status?: string};
   technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; volume_ratio_basis?: 'completed_day'|'intraday_unavailable'; trend: string; bar_count: number; atr14?: number; bollinger_width?: number; return_20d_pct?: number; return_60d_pct?: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};

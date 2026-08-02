@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.database import CandidateRepository
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models import CandidateCreate, CandidateUpdate, DataSourceHealth, QuoteSnapshot, ScoreInput
 from app.scoring import StrategyEngine
@@ -44,18 +44,32 @@ def test_candidate_performance_is_verified_from_later_snapshot(tmp_path):
     request = payload()
     created = repo.create(request, StrategyEngine(STRATEGY).score(request.score_input))
     one_day = repo.list_performance(created.id)[0]
-    trade_at = datetime.combine(one_day.due_date, datetime.min.time(), tzinfo=timezone.utc)
+    actual_trade_date = one_day.due_date + timedelta(days=1)
+    while actual_trade_date.weekday() >= 5:
+        actual_trade_date += timedelta(days=1)
+    trade_at = datetime.combine(actual_trade_date, datetime.min.time(), tzinfo=timezone.utc)
     repo.save_quotes([QuoteSnapshot(
         stock_code=created.stock_code, stock_name=created.stock_name, price=1650,
         trade_at=trade_at, fetched_at=trade_at, source="fixture", status="ok",
+    ), QuoteSnapshot(
+        stock_code="sh000300", stock_name="沪深300", price=100,
+        trade_at=created.selected_at - timedelta(days=1), fetched_at=created.selected_at,
+        source="fixture", status="ok",
+    ), QuoteSnapshot(
+        stock_code="sh000300", stock_name="沪深300", price=110,
+        trade_at=trade_at, fetched_at=trade_at, source="fixture", status="ok",
     )])
-    outcomes = repo.verify_performance(one_day.due_date)
+    outcomes = repo.verify_performance(actual_trade_date)
     verified = next(item for item in outcomes if item.horizon == "1d")
     assert verified.status == "verified"
     assert verified.return_pct == 10.0
+    assert verified.realized_trade_date == actual_trade_date
+    assert verified.benchmark_code == "sh000300"
+    assert verified.relative_return_pct == 0
     summary = repo.performance_summary(one_day.due_date)
     one_day_summary = next(item for item in summary["horizon_summary"] if item.horizon == "1d")
     assert one_day_summary.verified == 1 and one_day_summary.win_rate_pct == 100
+    assert one_day_summary.median_return_pct == 10 and one_day_summary.average_relative_return_pct == 0
 
 
 def test_source_health_is_persisted(tmp_path):

@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 from app.analysis.advice import build_advice
 from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider, FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts
-from app.analysis.diagnostics import ZHIXING_ALGORITHM_VERSION, ZHIXING_RULE_FINGERPRINT, build_diagnosis, build_factors, build_radar
+from app.analysis.diagnostics import ZHIXING_ALGORITHM_VERSION, ZHIXING_RULE_FINGERPRINT, build_diagnosis, build_etf_factors, build_factors, build_radar
 from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
@@ -58,8 +58,11 @@ class IndividualAnalysisService:
         weekly = calculate_indicators(weekly_bars)
         benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
         benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
-        fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name, quote)
-        core_missing = [field for field in quote.missing_fields if field in {"price", "change_pct", "pe", "pb", "turnover_pct", "amplitude_pct"}]
+        fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name, quote, asset_type=preset.asset_type)
+        core_quote_fields = {"price", "change_pct", "turnover_pct", "amplitude_pct"}
+        if preset.asset_type == "stock":
+            core_quote_fields |= {"pe", "pb"}
+        core_missing = [field for field in quote.missing_fields if field in core_quote_fields]
         if not bars:
             core_missing.append("daily_bars")
         if technical.bar_count < 60:
@@ -81,7 +84,7 @@ class IndividualAnalysisService:
         legacy_missing = rocket.missing_fields
         enrichment_missing = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status in {"error", "degraded"}]
         enrichment_stale = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status == "stale"]
-        factors = build_factors(
+        factors = build_etf_factors(price=quote.price, daily=technical, weekly=weekly, benchmark=benchmark) if preset.asset_type == "etf" else build_factors(
             price=quote.price, change_pct=quote.change_pct, daily=technical, weekly=weekly,
             benchmark=benchmark, sector_rank=industry.rank,
             fund_flow_ratio=fund_flow.main_flow_ratio, revenue_growth=finance.revenue_yoy,
@@ -111,7 +114,7 @@ class IndividualAnalysisService:
         advice = build_advice(
             price=quote.price, pe=quote.pe, roe=finance.roe, score=zhixing_index,
             confidence=zhixing_confidence, technical=technical, is_holding=request.is_holding,
-            position_cost=request.position_cost, core_complete=not core_missing and bool(bars),
+            position_cost=request.position_cost, core_complete=not core_missing and bool(bars), asset_type=preset.asset_type,
         )
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
@@ -130,7 +133,7 @@ class IndividualAnalysisService:
         if news_bear:
             diagnosis = diagnosis.model_copy(update={"risk_evidence": diagnosis.risk_evidence + [f"近期开源新闻中有 {news_bear} 条偏风险"]})
         source_statuses = [fund_flow.status, finance.status, industry.status, news.status]
-        enrichment_status = "error" if any(status == "error" for status in source_statuses) else "stale" if any(status == "stale" for status in source_statuses) else "degraded" if any(status == "degraded" for status in source_statuses) else "ok"
+        enrichment_status = "not_applicable" if preset.asset_type == "etf" else "error" if any(status == "error" for status in source_statuses) else "stale" if any(status == "stale" for status in source_statuses) else "degraded" if any(status == "degraded" for status in source_statuses) else "ok"
         core_status = "error" if quote.status == "error" or not bars else "degraded" if core_missing else "ok"
         legacy_status = "error" if quote.status == "error" else "degraded" if legacy_missing else "ok"
         deduped_missing = sorted(set(core_missing + enrichment_missing + enrichment_stale))
@@ -160,7 +163,14 @@ class IndividualAnalysisService:
             weekly_bars=weekly_bars,
         )
 
-    def fetch_supplementary(self, code: str, name: str, quote: QuoteSnapshot | None = None):
+    def fetch_supplementary(self, code: str, name: str, quote: QuoteSnapshot | None = None, asset_type: str = "stock"):
+        if asset_type == "etf":
+            return (
+                FundFlowFacts(source="not-applicable-etf", status="not_applicable", error="ETF不使用个股五档资金流"),
+                FinanceFacts(source="not-applicable-etf", status="not_applicable", error="ETF不适用公司财务指标"),
+                IndustryFacts(source="not-applicable-etf", status="not_applicable", error="ETF不适用个股行业排名"),
+                NewsFacts(source="not-applicable-etf", status="not_applicable", error="ETF不将个股新闻作为核心证据"),
+            )
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
                 "fund_flow": executor.submit(self.fund_flow_provider.fetch, code),
@@ -299,10 +309,10 @@ class IndividualAnalysisService:
     def resolve(self, value: str) -> StockPreset:
         normalized = value.strip().lower()
         if normalized.isdigit() and len(normalized) == 6:
-            normalized = ("sh" if normalized.startswith("6") else "sz") + normalized
+            normalized = ("bj" if normalized.startswith(("4", "8", "9")) else "sh" if normalized.startswith(("5", "6")) else "sz") + normalized
         if normalized in self.by_code:
             return self.by_code[normalized]
-        if normalized.startswith(("sh", "sz")) and len(normalized) == 8 and normalized[2:].isdigit():
+        if normalized.startswith(("sh", "sz", "bj")) and len(normalized) == 8 and normalized[2:].isdigit():
             return StockPreset(secid=normalized, code=normalized, name=value, sector="其他")
         for preset in self.by_code.values():
             if preset.name and preset.name in value:
@@ -354,7 +364,7 @@ class IndividualAnalysisService:
                 is_fund = "基金" in security_name or security_name in {"沪基", "深基"}
                 if not (is_a_share or is_fund):
                     continue
-                prefix = "sh" if code.startswith("6") else "sz"
+                prefix = "bj" if code.startswith(("4", "8", "9")) else "sh" if code.startswith(("5", "6")) else "sz"
                 normalized_code = prefix + code
                 asset_type = "etf" if "基金" in security_name or code.startswith(("15", "16", "50", "51", "56", "58")) else "stock"
                 results.append(StockSearchResult(code=normalized_code, name=name, market=security_name or None, asset_type=asset_type))

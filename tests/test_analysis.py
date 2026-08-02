@@ -177,7 +177,9 @@ class FakeAnalysisService(IndividualAnalysisService):
     def fetch_bars(self, code, days=252):
         return bars()
 
-    def fetch_supplementary(self, code, name, quote=None):
+    def fetch_supplementary(self, code, name, quote=None, asset_type="stock"):
+        if asset_type == "etf":
+            return super().fetch_supplementary(code, name, quote, asset_type=asset_type)
         return (
             FundFlowFacts(trade_date="2026-07-31", main_inflow=1.2, main_flow_ratio=0.03, status="ok"),
             FinanceFacts(report_date="2026-06-30", revenue=100, revenue_yoy=12, profit=20, profit_yoy=18, status="ok"),
@@ -234,6 +236,20 @@ def test_compare_api_analyzes_two_stocks_in_parallel(tmp_path, monkeypatch):
         assert len(payload["reports"]) == 2
         assert payload["errors"] == {}
         assert {item["stock_code"] for item in payload["reports"]} == {"sh603501", "sz002371"}
+
+
+def test_etf_uses_trend_model_without_stock_finance_or_industry(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCK_RESEARCH_DATA_DIR", str(tmp_path))
+    with TestClient(app) as client:
+        client.app.state.analysis_service = FakeAnalysisService(client.app.state.pool, FakeQuoteProvider())
+        response = client.post("/api/analysis", json={"stock": "512480"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["asset_type"] == "etf"
+        assert {factor["key"] for factor in payload["factors"]} == {"trend", "volume_fund", "volatility", "relative_strength", "cycle"}
+        assert "ETF仅按趋势" in payload["advice"]["summary"]
+        assert payload["finance"]["status"] == "not_applicable"
+        assert payload["industry"]["status"] == "not_applicable"
 
 
 def test_name_resolution_can_fall_back_outside_fixed_pool(monkeypatch):

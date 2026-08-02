@@ -45,7 +45,7 @@ function App() {
         <button className={view === 'research' ? 'active' : ''} onClick={() => setView('research')}><LayoutDashboard />个股研究</button>
         <button className={view === 'compare' ? 'active' : ''} onClick={() => setView('compare')}><GitCompare />股票对比</button>
         <button className={view === 'radar' ? 'active' : ''} onClick={() => { setView('radar'); void refreshRadar() }}><CircleGauge />板块雷达</button>
-        <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refreshCandidates() }}><FlaskConical />回测核验</button>
+        <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refreshCandidates() }}><FlaskConical />信号核验</button>
         <button className={view === 'sources' ? 'active' : ''} onClick={() => { setView('sources'); void refreshSourceHealth() }}><Database />数据源状态</button>
         <button className="nav-pending" disabled title="后续决定"><BookOpen />研究日志<span>后续决定</span></button>
       </nav>

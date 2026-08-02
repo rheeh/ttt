@@ -103,8 +103,34 @@ def build_radar(factors: list[FactorScore]) -> list[RadarDimension]:
     }
     by_key = {factor.key: factor for factor in factors}
     return [RadarDimension(key=key, label=label,
-                           score=round(mean([by_key[item].score for item in keys]), 2),
-                           factor_keys=keys) for key, (label, keys) in groups.items()]
+                           score=round(mean([by_key[item].score for item in keys if item in by_key]), 2),
+                           factor_keys=[item for item in keys if item in by_key])
+            for key, (label, keys) in groups.items() if any(item in by_key for item in keys)]
+
+
+def build_etf_factors(*, price: float | None, daily: TechnicalIndicators,
+                      weekly: TechnicalIndicators, benchmark: TechnicalIndicators | None) -> list[FactorScore]:
+    """Trend-only ETF diagnostics; no company PE, finance or industry rank."""
+    factors: list[FactorScore] = []
+    trend_score = {"强势上涨": 90, "上涨": 70, "震荡": 50, "下跌": 30, "快速下跌": 15}.get(daily.trend, 50)
+    factors.append(_score("trend", "趋势", trend_score, f"日线{daily.trend}", source="derived-etf"))
+    if daily.volume_ratio is None:
+        factors.append(_score("volume_fund", "量能", 50, "量比未接入或盘中不计算", available=False, source="etf-volume"))
+    else:
+        factors.append(_score("volume_fund", "量能", 50 + (daily.volume_ratio - 1) * 30, f"量比 {daily.volume_ratio:.2f}", source="etf-volume"))
+    if daily.atr14 is None or not price:
+        factors.append(_score("volatility", "波动", 50, "ATR 缺失", available=False, source="etf-technical"))
+    else:
+        atr_pct = daily.atr14 / price * 100
+        factors.append(_score("volatility", "波动", 70 if atr_pct <= 3 else 50 if atr_pct <= 6 else 30, f"ATR14 占价 {atr_pct:.2f}%", source="etf-technical"))
+    if benchmark and daily.return_20d_pct is not None and benchmark.return_20d_pct is not None:
+        relative = daily.return_20d_pct - benchmark.return_20d_pct
+        factors.append(_score("relative_strength", "相对基准", 50 + relative * 4, f"20日相对基准超额 {relative:+.1f}%", source="etf-vs-benchmark"))
+    else:
+        factors.append(_score("relative_strength", "相对基准", 50, "基准数据不足", available=False, source="etf-vs-benchmark"))
+    weekly_score = {"强势上涨": 85, "上涨": 70, "震荡": 50, "下跌": 30, "快速下跌": 20}.get(weekly.trend, 50)
+    factors.append(_score("cycle", "日周线", weekly_score, f"周线{weekly.trend}", source="derived-etf"))
+    return factors
 
 
 def build_diagnosis(*, price: float | None, daily: TechnicalIndicators, weekly: TechnicalIndicators,

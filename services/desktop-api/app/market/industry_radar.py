@@ -49,9 +49,14 @@ class IndustryRadarProvider:
                 degraded_reasons=[f"新浪行业数据暂时不可用：{self._short_error(exc)}"],
             )
 
-        items: list[IndustryRadarItem] = []
+        # Sina's constituent endpoint is one request per board. Keep the
+        # detailed breadth sample bounded so one refresh cannot become a
+        # dozens-of-requests timeout; the remaining boards retain their
+        # current snapshot but are explicitly marked as lacking breadth.
+        detail_rows = rows[:12]
+        items: list[IndustryRadarItem] = [self._current_only_item(row, snapshot_at) for row in rows[12:]]
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(self._build_one, ak, row, snapshot_at): row for row in rows}
+            futures = {executor.submit(self._build_one, ak, row, snapshot_at): row for row in detail_rows}
             for future in as_completed(futures):
                 row = futures[future]
                 name = str(_value(row, "板块", "板块名称") or "未知板块")
@@ -71,7 +76,18 @@ class IndustryRadarProvider:
             # deliberately kept separate from confirmed bottoming signals.
             building=[], confirmed=[], overheated=[],
             other=[item for item in items if item.stage == "数据不足"][:100],
-            degraded_reasons=["当前使用新浪行业快照；板块历史K线接入前，不生成筑底/突破评分"],
+            degraded_reasons=["新浪行业当前快照已返回；板块历史K线尚未接入，因此暂不生成筑底/突破评分"],
+        )
+
+    @staticmethod
+    def _current_only_item(row: dict[str, Any], fetched_at: datetime) -> IndustryRadarItem:
+        name = str(_value(row, "板块", "板块名称") or "未知板块")
+        change = _number(_value(row, "涨跌幅", "板块涨跌幅"))
+        count = int(_number(_value(row, "公司家数", "成分股数量")) or 0)
+        return IndustryRadarProvider._item(
+            name, fetched_at, change=change, constituent_count=count or None,
+            evidence=[f"当前涨跌幅 {change:+.2f}%" if change is not None else "当前涨跌幅缺失", "未请求成分详情（受请求上限保护）"],
+            error="当前仅有新浪行业快照，未取得成分广度和历史K线",
         )
 
     def _build_one(self, ak: Any, row: dict[str, Any], fetched_at: datetime) -> IndustryRadarItem:

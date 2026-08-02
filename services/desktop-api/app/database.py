@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 
 from app.analysis.models import AnalysisReport
 from app.models import (
@@ -91,7 +92,13 @@ CREATE TABLE IF NOT EXISTS candidate_performance (
     due_date TEXT NOT NULL,
     baseline_price REAL NOT NULL,
     realized_price REAL,
+    realized_trade_date TEXT,
     return_pct REAL,
+    benchmark_code TEXT,
+    benchmark_baseline_price REAL,
+    benchmark_realized_price REAL,
+    benchmark_return_pct REAL,
+    relative_return_pct REAL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'verified', 'unavailable')),
     measured_at TEXT,
     source TEXT,
@@ -178,6 +185,18 @@ class CandidateRepository:
             for name, definition in migrations.items():
                 if name not in scan_columns:
                     connection.execute(f"ALTER TABLE scan_runs ADD COLUMN {name} {definition}")
+            performance_columns = {row["name"] for row in connection.execute("PRAGMA table_info(candidate_performance)")}
+            performance_migrations = {
+                "realized_trade_date": "TEXT",
+                "benchmark_code": "TEXT",
+                "benchmark_baseline_price": "REAL",
+                "benchmark_realized_price": "REAL",
+                "benchmark_return_pct": "REAL",
+                "relative_return_pct": "REAL",
+            }
+            for name, definition in performance_migrations.items():
+                if name not in performance_columns:
+                    connection.execute(f"ALTER TABLE candidate_performance ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)
@@ -436,30 +455,65 @@ class CandidateRepository:
                 (as_of.isoformat(),),
             ).fetchall()
             for row in rows:
+                candidate_row = connection.execute(
+                    "SELECT stock_code, selected_at FROM candidate_items WHERE id = ?",
+                    (row["candidate_id"],),
+                ).fetchone()
                 quote_row = connection.execute(
                     """SELECT payload_json FROM quote_snapshots
                     WHERE stock_code = ? AND date(trade_at) >= ? AND date(trade_at) <= ?
                     ORDER BY trade_at LIMIT 1""",
-                    (connection.execute("SELECT stock_code FROM candidate_items WHERE id = ?", (row["candidate_id"],)).fetchone()[0],
-                     row["due_date"], as_of.isoformat()),
+                    (candidate_row["stock_code"], row["due_date"], as_of.isoformat()),
                 ).fetchone()
                 status, realized, return_pct, source, note = "pending", None, None, None, None
+                realized_trade_date = None
+                benchmark_code, benchmark_baseline, benchmark_realized = "sh000300", None, None
+                benchmark_return, relative_return = None, None
                 if quote_row:
                     quote = QuoteSnapshot.model_validate_json(quote_row["payload_json"])
                     if quote.price and quote.price > 0:
                         realized = quote.price
                         return_pct = round((realized - row["baseline_price"]) / row["baseline_price"] * 100, 4)
+                        realized_trade_date = quote.trade_at.date() if quote.trade_at else None
+                        benchmark_baseline_row = connection.execute(
+                            """SELECT payload_json FROM quote_snapshots
+                            WHERE stock_code = ? AND datetime(trade_at) <= datetime(?)
+                            ORDER BY trade_at DESC LIMIT 1""",
+                            (benchmark_code, candidate_row["selected_at"]),
+                        ).fetchone()
+                        benchmark_realized_row = connection.execute(
+                            """SELECT payload_json FROM quote_snapshots
+                            WHERE stock_code = ? AND date(trade_at) >= ? AND date(trade_at) <= ?
+                            ORDER BY trade_at LIMIT 1""",
+                            (benchmark_code, realized_trade_date.isoformat(), as_of.isoformat()),
+                        ).fetchone() if realized_trade_date else None
+                        if benchmark_baseline_row and benchmark_realized_row:
+                            benchmark_baseline_quote = QuoteSnapshot.model_validate_json(benchmark_baseline_row["payload_json"])
+                            benchmark_realized_quote = QuoteSnapshot.model_validate_json(benchmark_realized_row["payload_json"])
+                            if benchmark_baseline_quote.price and benchmark_baseline_quote.price > 0 and benchmark_realized_quote.price and benchmark_realized_quote.price > 0:
+                                benchmark_baseline = benchmark_baseline_quote.price
+                                benchmark_realized = benchmark_realized_quote.price
+                                benchmark_return = round((benchmark_realized - benchmark_baseline) / benchmark_baseline * 100, 4)
+                                relative_return = round(return_pct - benchmark_return, 4)
                         status, source = "verified", quote.source
                 elif as_of > date.fromisoformat(row["due_date"]) + timedelta(days=10):
                     status, note = "unavailable", "目标交易日后仍无有效行情快照"
                 if status != "pending":
                     connection.execute(
-                        """UPDATE candidate_performance SET realized_price=?, return_pct=?, status=?, measured_at=?, source=?, note=? WHERE id=?""",
-                        (realized, return_pct, status, now, source, note, row["id"]),
+                        """UPDATE candidate_performance SET realized_price=?, realized_trade_date=?, return_pct=?,
+                        benchmark_code=?, benchmark_baseline_price=?, benchmark_realized_price=?, benchmark_return_pct=?,
+                        relative_return_pct=?, status=?, measured_at=?, source=?, note=? WHERE id=?""",
+                        (realized, realized_trade_date.isoformat() if realized_trade_date else None, return_pct,
+                         benchmark_code if benchmark_return is not None else None, benchmark_baseline, benchmark_realized,
+                         benchmark_return, relative_return, status, now, source, note, row["id"]),
                     )
                 changed.append(PerformanceOutcome(
                     candidate_id=row["candidate_id"], horizon=row["horizon"], due_date=date.fromisoformat(row["due_date"]),
-                    baseline_price=row["baseline_price"], realized_price=realized, return_pct=return_pct,
+                    baseline_price=row["baseline_price"], realized_price=realized,
+                    realized_trade_date=realized_trade_date, return_pct=return_pct,
+                    benchmark_code=benchmark_code if benchmark_return is not None else None,
+                    benchmark_baseline_price=benchmark_baseline, benchmark_realized_price=benchmark_realized,
+                    benchmark_return_pct=benchmark_return, relative_return_pct=relative_return,
                     status=status, measured_at=datetime.fromisoformat(now) if status != "pending" else None,
                     source=source, note=note,
                 ))
@@ -479,10 +533,23 @@ class CandidateRepository:
                 FROM candidate_performance GROUP BY horizon
                 ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 ELSE 20 END"""
             ).fetchall()
+            return_rows = connection.execute(
+                "SELECT horizon, return_pct, relative_return_pct FROM candidate_performance WHERE status = 'verified'"
+            ).fetchall()
+        returns_by_horizon: dict[str, list[float]] = {}
+        relative_by_horizon: dict[str, list[float]] = {}
+        for row in return_rows:
+            if row["return_pct"] is not None:
+                returns_by_horizon.setdefault(row["horizon"], []).append(float(row["return_pct"]))
+            if row["relative_return_pct"] is not None:
+                relative_by_horizon.setdefault(row["horizon"], []).append(float(row["relative_return_pct"]))
         horizon_summary = [PerformanceHorizonSummary(
             horizon=row["horizon"], samples=row["samples"], verified=row["verified"] or 0, wins=row["wins"] or 0,
             win_rate_pct=round((row["wins"] or 0) / row["verified"] * 100, 2) if row["verified"] else None,
             average_return_pct=round(row["average_return"], 4) if row["average_return"] is not None else None,
+            median_return_pct=round(median(returns_by_horizon[row["horizon"]]), 4) if returns_by_horizon.get(row["horizon"]) else None,
+            benchmark_code="sh000300" if relative_by_horizon.get(row["horizon"]) else None,
+            average_relative_return_pct=round(sum(relative_by_horizon[row["horizon"]]) / len(relative_by_horizon[row["horizon"]]), 4) if relative_by_horizon.get(row["horizon"]) else None,
         ) for row in horizon_rows]
         return {
             "processed": sum(counts.values()), "verified": counts.get("verified", 0),
@@ -498,7 +565,11 @@ class CandidateRepository:
             ).fetchall()
         return [PerformanceOutcome(
             candidate_id=row["candidate_id"], horizon=row["horizon"], due_date=date.fromisoformat(row["due_date"]),
-            baseline_price=row["baseline_price"], realized_price=row["realized_price"], return_pct=row["return_pct"],
+            baseline_price=row["baseline_price"], realized_price=row["realized_price"],
+            realized_trade_date=date.fromisoformat(row["realized_trade_date"]) if row["realized_trade_date"] else None,
+            return_pct=row["return_pct"], benchmark_code=row["benchmark_code"],
+            benchmark_baseline_price=row["benchmark_baseline_price"], benchmark_realized_price=row["benchmark_realized_price"],
+            benchmark_return_pct=row["benchmark_return_pct"], relative_return_pct=row["relative_return_pct"],
             status=row["status"], measured_at=datetime.fromisoformat(row["measured_at"]) if row["measured_at"] else None,
             source=row["source"], note=row["note"],
         ) for row in rows]

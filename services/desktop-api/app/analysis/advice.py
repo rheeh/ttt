@@ -29,7 +29,23 @@ def build_zones(*, price: float | None, support: float | None, resistance: float
 
 def build_advice(*, price: float | None, pe: float | None, roe: float | None, score: float,
                  confidence: float, technical: TechnicalIndicators, is_holding: bool,
-                 position_cost: float | None, core_complete: bool) -> Advice:
+                 position_cost: float | None, core_complete: bool, asset_type: str = "stock") -> Advice:
+    if asset_type == "etf":
+        category = "C档情绪型"
+        trend_valid = technical.trend in {"强势上涨", "上涨", "震荡"}
+        action = "持有" if is_holding and trend_valid else "观望"
+        summary = "ETF仅按趋势、量能、波动和相对基准分析，不套用个股 PE、财务和行业排名。"
+        triggered = ["ETF趋势模型"] + ([f"知行指数 {score:.0f}"] if score >= 55 else [])
+        unmet = ["等待 ETF 趋势与基准相对强度进一步确认"] if action == "观望" else []
+        return Advice(
+            action=action, category=category, summary=summary, risk_level="中",
+            operations=["关注跟踪误差、成交活跃度和标的指数状态"],
+            zones=build_zones(price=price, support=technical.support20, resistance=technical.resistance20,
+                              atr=technical.atr14, trend_valid=trend_valid, confidence=confidence),
+            triggered_conditions=triggered, unmet_conditions=unmet,
+            invalidation_conditions=["收盘跌破 ETF 20 日区间下沿并无法收回"],
+            data_confidence=confidence, review_after="下一个交易日收盘后",
+        )
     if pe is not None and 0 < pe < 40 and roe is not None and roe > 5:
         category = "A档价值型"
     elif pe is not None and 0 < pe < 80:
