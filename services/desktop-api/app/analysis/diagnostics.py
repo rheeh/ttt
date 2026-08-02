@@ -22,7 +22,7 @@ def _clamp(value: float) -> float:
 
 def build_factors(*, price: float | None, change_pct: float | None, daily: TechnicalIndicators,
                   weekly: TechnicalIndicators, benchmark: TechnicalIndicators | None,
-                  sector_rank: int | None, in_reference_pool: bool,
+                  sector_rank: int | None,
                   fund_flow_ratio: float | None, revenue_growth: float | None) -> list[FactorScore]:
     factors: list[FactorScore] = []
     trend_score = {"强势上涨": 90, "上涨": 70, "震荡": 50, "下跌": 30, "快速下跌": 15}.get(daily.trend, 50)
@@ -84,9 +84,7 @@ def build_factors(*, price: float | None, change_pct: float | None, daily: Techn
         factors.append(_score("industry", "行业热度", 50, "行业横截面尚未接入", available=False, source="pending"))
     else:
         industry_score = 95 if sector_rank <= 5 else 80 if sector_rank <= 10 else 60 if sector_rank <= 20 else 35
-        if in_reference_pool:
-            industry_score += 5
-        factors.append(_score("industry", "行业热度", industry_score, f"行业排名第 {sector_rank}" + ("，参考池偏好+5" if in_reference_pool else ""), source="eastmoney-industry"))
+        factors.append(_score("industry", "行业热度", industry_score, f"行业排名第 {sector_rank}", source="eastmoney-industry"))
     if revenue_growth is None:
         factors.append(_score("finance", "财务增速", 50, "营收增速缺失", available=False, source="eastmoney-finance"))
     else:

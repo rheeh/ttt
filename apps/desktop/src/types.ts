@@ -69,3 +69,18 @@ export type CompareResponse = {reports: AnalysisReport[]; errors: Record<string,
 
 export type StockSearchResult = {code: string; name: string; market?: string; asset_type: 'stock'|'etf'; source: string}
 export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}
+
+export type IndustryRadarItem = {
+  name: string; stage: '下跌中'|'低位企稳'|'底部改善'|'突破确认'|'高位拥挤'; score?: number;
+  low_position_score?: number; deceleration_score?: number; breadth_score?: number;
+  volume_price_score?: number; relative_strength_score?: number; change_pct?: number;
+  return_5d_pct?: number; return_20d_pct?: number; drawdown_1y_pct?: number;
+  up_count?: number; down_count?: number; constituent_count?: number; coverage_pct?: number;
+  evidence: string[]; risks: string[]; status: 'ok'|'degraded'|'error'; source: string; fetched_at: string;
+}
+export type IndustryRadar = {
+  scope: 'all_industries'; snapshot_at: string; source: string; data_status: 'ok'|'degraded'|'error';
+  coverage_count: number; coverage_total: number; coverage_pct?: number; confirmation_days: number;
+  rule_version: string; building: IndustryRadarItem[]; confirmed: IndustryRadarItem[];
+  overheated: IndustryRadarItem[]; other: IndustryRadarItem[]; degraded_reasons: string[];
+}

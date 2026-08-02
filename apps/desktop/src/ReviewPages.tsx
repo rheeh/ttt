@@ -1,6 +1,17 @@
 import { useMemo } from 'react'
 import { Activity, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import type { Candidate, DataSourceHealthResponse, MarketReview, MarketReviewRun, PerformanceVerification } from './types'
+import type { Candidate, DataSourceHealthResponse, IndustryRadar, IndustryRadarItem, MarketReview, MarketReviewRun, PerformanceVerification } from './types'
+
+const radarPct = (value?: number) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+
+function RadarCard({item}: {item: IndustryRadarItem}) {
+  return <article className="panel radar-card"><div className="panel-title"><div><h3>{item.name}</h3><small>{item.stage} · {item.score == null ? '不可评分' : `${item.score.toFixed(0)}分`}</small></div><span className={`source-badge ${item.status}`}>{item.status === 'ok' ? '覆盖充分' : '部分数据'}</span></div><div className="radar-metrics"><span>近5日 <b className={(item.return_5d_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{radarPct(item.return_5d_pct)}</b></span><span>近20日 <b className={(item.return_20d_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{radarPct(item.return_20d_pct)}</b></span><span>回撤 <b>{radarPct(item.drawdown_1y_pct)}</b></span></div><div className="radar-evidence">{item.evidence.slice(0, 3).map(text => <span key={text}>{text}</span>)}</div>{item.risks.length > 0 && <p className="source-note">风险：{item.risks[0]}</p>}</article>
+}
+
+export function IndustryRadarPage({radar, loading, onRefresh}: {radar: IndustryRadar | null; loading: boolean; onRefresh: () => void}) {
+  const sections: [string, string, IndustryRadarItem[]][] = [['正在筑底', '低位、跌势放缓、内部开始改善；不代表即将上涨。', radar?.building ?? []], ['刚刚确认', '相对强度或关键位置出现确认，仍需观察持续性。', radar?.confirmed ?? []], ['高位拥挤', '短期涨幅和位置偏热，作为风险提示而非追涨名单。', radar?.overheated ?? []]]
+  return <><header><div><p className="eyebrow">INDUSTRY RADAR</p><h1>板块雷达</h1><p>先识别板块所处阶段，再下钻到个股研究；板块判断不使用旧 66 股参考池。</p></div><button className="icon-btn" onClick={onRefresh} disabled={loading}>{loading ? <RefreshCw className="spin" /> : <RefreshCw />}</button></header><section className="review-meta"><span>全行业数据源：{radar?.source ?? '尚未获取'}</span><span>覆盖 {radar?.coverage_count ?? 0}/{radar?.coverage_total ?? 0} · {radar?.coverage_pct == null ? '—' : `${radar.coverage_pct.toFixed(1)}%`}</span><span>规则 {radar?.rule_version ?? 'industry-radar-v1'}</span><button className="scan-button" onClick={onRefresh} disabled={loading}>{loading ? '读取中…' : '刷新雷达'}</button></section>{radar?.degraded_reasons.map(reason => <p className="scan-error" key={reason}><Activity />{reason}</p>)}{!radar ? <section className="panel review-empty"><Activity /><h2>还没有板块状态</h2><p>点击刷新，读取独立行业列表与历史行情。数据不足会明确标注，不回退到旧参考池。</p></section> : <>{sections.map(([title, description, items]) => <section className="radar-section" key={title}><div className="panel-title"><div><h2>{title}</h2><small>{description}</small></div><span className="pill">{items.length} 个板块</span></div>{items.length ? <div className="radar-grid">{items.map(item => <RadarCard item={item} key={item.name} />)}</div> : <div className="panel radar-empty">暂无满足当前门槛的板块</div>}</section>)}</>}</>
+}
 
 type ReviewProps = { review: MarketReview | null; runs: MarketReviewRun[]; selectedRunId?: number; loading: boolean; scanning: boolean; scanMessage?: string; onRefresh: (runId?: number) => void; onScan: () => void; onOpenStock: (code: string) => void }
 

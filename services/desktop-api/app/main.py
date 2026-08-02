@@ -17,9 +17,10 @@ from app.market.health import DataSourceHealthService
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.market.all_a_snapshot import AllAMarketSnapshotProvider
+from app.market.industry_radar import IndustryRadarProvider
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    AllAMarketSnapshot, DataSourceHealthResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
+    AllAMarketSnapshot, DataSourceHealthResponse, IndustryRadarResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates)
     app.state.all_a_snapshot = AllAMarketSnapshotProvider()
+    app.state.industry_radar = IndustryRadarProvider()
     yield
 
 
@@ -106,13 +108,19 @@ def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> Ca
     return CandidateBatchResponse(run_id=payload.run_id, created=len(created), skipped=max(0, len(pairs) - len(created)), candidates=created)
 
 
-@app.get("/api/market/review", response_model=MarketReviewResponse)
-def market_review(request: Request, run_id: int | None = Query(default=None, ge=1)) -> MarketReviewResponse:
+@app.get("/api/market/industry-radar", response_model=IndustryRadarResponse)
+def industry_radar(request: Request) -> IndustryRadarResponse:
+    return request.app.state.industry_radar.fetch()
+
+
+@app.get("/api/market/review", response_model=MarketReviewResponse, include_in_schema=False)
+def legacy_market_review(request: Request, run_id: int | None = Query(default=None, ge=1)) -> MarketReviewResponse:
+    """Deprecated compatibility endpoint; the desktop product no longer exposes this page."""
     return candidates(request).market_review(run_id=run_id)
 
 
-@app.get("/api/market/review/runs", response_model=list[MarketReviewRun])
-def market_review_runs(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> list[MarketReviewRun]:
+@app.get("/api/market/review/runs", response_model=list[MarketReviewRun], include_in_schema=False)
+def legacy_market_review_runs(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> list[MarketReviewRun]:
     return candidates(request).list_market_review_runs(limit=limit)
 
 

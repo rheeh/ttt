@@ -348,6 +348,50 @@ class AllAMarketSnapshot(BaseModel):
     strategy_scoreable: int = 0
 
 
+IndustryStage = Literal["下跌中", "低位企稳", "底部改善", "突破确认", "高位拥挤"]
+
+
+class IndustryRadarItem(BaseModel):
+    name: str
+    stage: IndustryStage
+    score: float | None = None
+    low_position_score: float | None = None
+    deceleration_score: float | None = None
+    breadth_score: float | None = None
+    volume_price_score: float | None = None
+    relative_strength_score: float | None = None
+    change_pct: float | None = None
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    drawdown_1y_pct: float | None = None
+    up_count: int | None = None
+    down_count: int | None = None
+    constituent_count: int | None = None
+    coverage_pct: float | None = None
+    evidence: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    status: Literal["ok", "degraded", "error"] = "degraded"
+    source: str
+    fetched_at: datetime
+
+
+class IndustryRadarResponse(BaseModel):
+    scope: Literal["all_industries"] = "all_industries"
+    snapshot_at: datetime
+    source: str
+    data_status: Literal["ok", "degraded", "error"]
+    coverage_count: int
+    coverage_total: int
+    coverage_pct: float | None = None
+    confirmation_days: int = 1
+    rule_version: str = "industry-radar-v1"
+    building: list[IndustryRadarItem] = Field(default_factory=list)
+    confirmed: list[IndustryRadarItem] = Field(default_factory=list)
+    overheated: list[IndustryRadarItem] = Field(default_factory=list)
+    other: list[IndustryRadarItem] = Field(default_factory=list)
+    degraded_reasons: list[str] = Field(default_factory=list)
+
+
 class DataSourceHealth(BaseModel):
     source: str
     category: str

@@ -12,7 +12,6 @@ from app.analysis.advice import build_advice
 from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider, FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts
 from app.analysis.diagnostics import ZHIXING_ALGORITHM_VERSION, ZHIXING_RULE_FINGERPRINT, build_diagnosis, build_factors, build_radar
 from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
-from app.analysis.local_industry import LocalIndustryProvider
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
 from app.market.scanner import StockPool
@@ -49,12 +48,6 @@ class IndividualAnalysisService:
         self.finance_provider = EastmoneyFinanceProvider(timeout_seconds)
         self.industry_provider = EastmoneyIndustryProvider(timeout_seconds)
         self.news_provider = EastmoneyNewsProvider(timeout_seconds)
-        # The derived industry fallback must not turn a failed supplement into
-        # a 20-second retry storm.  Use one short, no-retry Tencent batch.
-        local_quote_provider = TencentQuoteProvider(
-            timeout_seconds=min(timeout_seconds, 3), retries=0, chunk_size=100,
-        )
-        self.local_industry_provider = LocalIndustryProvider(self.pool, local_quote_provider)
 
     def analyze(self, request: AnalysisRequest) -> AnalysisReport:
         preset = self.resolve(request.stock)
@@ -92,7 +85,7 @@ class IndividualAnalysisService:
                               is_holding=request.is_holding, position_cost=request.position_cost)
         factors = build_factors(
             price=quote.price, change_pct=quote.change_pct, daily=technical, weekly=weekly,
-            benchmark=benchmark, sector_rank=industry.rank, in_reference_pool=preset.code in self.by_code,
+            benchmark=benchmark, sector_rank=industry.rank,
             fund_flow_ratio=fund_flow.main_flow_ratio, revenue_growth=finance.revenue_yoy,
         )
         if fund_flow.source == "tencent-qt-extension":
@@ -168,11 +161,10 @@ class IndividualAnalysisService:
         fund_flow = raw[0]
         if fund_flow.status == "error" and quote is not None:
             fund_flow = self._fallback_fund_flow_from_quote(quote, fund_flow)
+        # A failed industry supplement remains unavailable. The legacy 66-name
+        # pool is not a representative cross-section and must not be used as a
+        # silent substitute for market-wide industry data.
         industry = raw[2]
-        if industry.status == "error":
-            local_industry = self.local_industry_provider.fetch(code)
-            if local_industry.status != "error":
-                industry = local_industry
         return (
             self._with_cache(code, fund_flow, FundFlowFacts),
             self._with_cache(code, raw[1], FinanceFacts),
