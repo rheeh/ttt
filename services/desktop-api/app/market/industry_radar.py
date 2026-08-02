@@ -3,7 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
+from app.analysis.data_sources import _json_request_any
 from app.models import IndustryRadarItem, IndustryRadarResponse
 
 
@@ -35,15 +37,31 @@ class IndustryRadarProvider:
 
     def fetch(self) -> IndustryRadarResponse:
         snapshot_at = datetime.now(timezone.utc)
+        ak = None
         try:
             import akshare as ak
             frame = ak.stock_board_industry_name_em()
             rows = frame.to_dict("records")
         except Exception as exc:
+            # AKShare currently hard-codes one Eastmoney host. Try the same
+            # official endpoint through the rotating hosts before declaring the
+            # radar unavailable.
+            try:
+                rows, endpoint = self._fetch_rows_direct()
+                source = f"{self.name}+direct:{endpoint}"
+            except Exception as direct_exc:
+                return IndustryRadarResponse(
+                    snapshot_at=snapshot_at, source=self.name, data_status="error",
+                    coverage_count=0, coverage_total=0,
+                    degraded_reasons=[f"行业列表暂时不可用（已尝试 AKShare 与备用节点）：{self._short_error(direct_exc)}"])
+        else:
+            source = self.name
+
+        if not rows:
             return IndustryRadarResponse(
-                snapshot_at=snapshot_at, source=self.name, data_status="error",
+                snapshot_at=snapshot_at, source=source, data_status="error",
                 coverage_count=0, coverage_total=0,
-                degraded_reasons=[f"行业列表获取失败：{exc}"])
+                degraded_reasons=["行业列表返回为空，未生成板块判断"])
 
         items: list[IndustryRadarItem] = []
         with ThreadPoolExecutor(max_workers=8) as executor:
@@ -54,13 +72,13 @@ class IndustryRadarProvider:
                 except Exception as exc:
                     row = futures[future]
                     name = str(_field(row, "板块名称", "名称") or "未知板块")
-                    items.append(self._error_item(name, snapshot_at, str(exc)))
+                    items.append(self._error_item(name, snapshot_at, self._short_error(exc)))
         items.sort(key=lambda item: item.score if item.score is not None else -1, reverse=True)
         usable = [item for item in items if item.score is not None and item.status != "error"]
         status = "ok" if usable and len(usable) == len(items) else "degraded" if usable else "error"
         reasons = [] if status == "ok" else [f"{len(usable)}/{len(items)} 个板块具备可评分历史数据"]
         return IndustryRadarResponse(
-            snapshot_at=snapshot_at, source=self.name, data_status=status,
+            snapshot_at=snapshot_at, source=source, data_status=status,
             coverage_count=len(usable), coverage_total=len(items),
             coverage_pct=round(len(usable) / len(items) * 100, 2) if items else None,
             building=sorted([item for item in items if item.stage in {"低位企稳", "底部改善"}], key=lambda x: x.score or -1, reverse=True)[:20],
@@ -70,16 +88,40 @@ class IndustryRadarProvider:
             degraded_reasons=reasons,
         )
 
+    @classmethod
+    def _fetch_rows_direct(cls) -> tuple[list[dict[str, Any]], str]:
+        params = {
+            "pn": 1, "pz": 100, "po": 1, "np": 1,
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2,
+            "invt": 2, "fid": "f3", "fs": "m:90 t:2 f:!50",
+            "fields": "f3,f14,f62,f104,f105",
+        }
+        hosts = ("17.push2.eastmoney.com", "push2.eastmoney.com", "push2his.eastmoney.com")
+        urls = [f"https://{host}/api/qt/clist/get?{urlencode(params)}" for host in hosts]
+        payload, endpoint = _json_request_any(urls, timeout=8)
+        data = payload.get("data") or {}
+        diff = data.get("diff") or []
+        rows = list(diff.values()) if isinstance(diff, dict) else list(diff)
+        normalized = [{"板块名称": row.get("f14"), "涨跌幅": row.get("f3"), "上涨家数": row.get("f104"), "下跌家数": row.get("f105")} for row in rows]
+        return normalized, endpoint
+
+    @staticmethod
+    def _short_error(error: Exception) -> str:
+        text = str(error).replace("\n", " ")
+        return text if len(text) <= 220 else text[:217] + "..."
+
     def _build_one(self, ak: Any, row: dict[str, Any], fetched_at: datetime) -> IndustryRadarItem:
         name = str(_field(row, "板块名称", "名称") or "未知板块")
         change = _number(_field(row, "涨跌幅", "涨跌幅(%)"))
         try:
+            if ak is None:
+                raise RuntimeError("历史行情需要安装可选依赖 akshare")
             history = ak.stock_board_industry_hist_em(symbol=name, period="daily", adjust="")
             history_rows = history.to_dict("records")
             closes = [_number(_field(record, "收盘", "收盘价")) for record in history_rows]
             closes = [value for value in closes if value is not None and value > 0]
         except Exception as exc:
-            return self._error_item(name, fetched_at, f"历史行情不可用：{exc}")
+            return self._error_item(name, fetched_at, f"历史行情不可用：{self._short_error(exc)}")
         if len(closes) < 60:
             return self._error_item(name, fetched_at, f"历史行情不足（{len(closes)}/60）")
         latest = closes[-1]
