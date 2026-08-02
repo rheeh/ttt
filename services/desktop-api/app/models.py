@@ -240,6 +240,17 @@ class MarketScanResponse(BaseModel):
     rule_fingerprint: str
     rotation_pool_codes: list[str] = Field(default_factory=list)
     items: list[MarketScanItem]
+    # Scope metadata: a strategy scan is never a whole-market health snapshot.
+    scope: Literal["reference_pool", "all_a_market"] = "reference_pool"
+    pool_name: str = "reference-pool"
+    pool_version: str = "unknown"
+    pool_component_count: int = 0
+    transaction_date: date | None = None
+    coverage_count: int = 0
+    coverage_total: int = 0
+    coverage_pct: float | None = None
+    data_status: Literal["ok", "degraded", "error"] = "degraded"
+    degraded_reasons: list[str] = Field(default_factory=list)
 
 
 class MarketReviewItem(BaseModel):
@@ -274,13 +285,30 @@ class MarketReviewResponse(BaseModel):
     up_count: int = 0
     down_count: int = 0
     flat_count: int = 0
+    # Deprecated alias retained for API compatibility; UI uses sample_up_rate_pct.
     breadth_pct: float | None = None
+    sample_up_rate_pct: float | None = None
+    change_sample_count: int = 0
     average_change_pct: float | None = None
     average_score: float | None = None
+    strategy_average_score: float | None = None
+    strategy_scoreable: int = 0
     rotation_pool_codes: list[str] = Field(default_factory=list)
     top_gainers: list[MarketReviewItem] = Field(default_factory=list)
     top_scores: list[MarketReviewItem] = Field(default_factory=list)
     sectors: list[MarketSectorReview] = Field(default_factory=list)
+    scope: Literal["reference_pool", "all_a_market"] = "reference_pool"
+    pool_name: str = "reference-pool"
+    pool_version: str = "unknown"
+    pool_component_count: int = 0
+    transaction_date: date | None = None
+    scan_started_at: datetime | None = None
+    scan_completed_at: datetime | None = None
+    coverage_count: int = 0
+    coverage_total: int = 0
+    coverage_pct: float | None = None
+    data_status: Literal["ok", "degraded", "error"] = "degraded"
+    degraded_reasons: list[str] = Field(default_factory=list)
 
 
 class MarketReviewRun(BaseModel):
@@ -290,6 +318,34 @@ class MarketReviewRun(BaseModel):
     total: int
     scoreable: int
     average_change_pct: float | None = None
+    scope: Literal["reference_pool", "all_a_market"] = "reference_pool"
+    pool_name: str = "reference-pool"
+    pool_version: str = "unknown"
+    pool_component_count: int = 0
+    transaction_date: date | None = None
+    coverage_pct: float | None = None
+    data_status: Literal["ok", "degraded", "error"] = "degraded"
+
+
+class AllAMarketSnapshot(BaseModel):
+    """Whole-A health snapshot; deliberately contains no strategy scores."""
+    scope: Literal["all_a_market"] = "all_a_market"
+    snapshot_at: datetime
+    transaction_date: date | None = None
+    source: str
+    data_status: Literal["ok", "degraded", "error"]
+    total: int = 0
+    coverage_count: int = 0
+    coverage_total: int = 0
+    coverage_pct: float | None = None
+    up_count: int = 0
+    down_count: int = 0
+    flat_count: int = 0
+    sample_up_rate_pct: float | None = None
+    average_change_pct: float | None = None
+    degraded_reasons: list[str] = Field(default_factory=list)
+    strategy_used: bool = False
+    strategy_scoreable: int = 0
 
 
 class DataSourceHealth(BaseModel):

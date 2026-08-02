@@ -61,7 +61,17 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     strategy_id TEXT NOT NULL,
     strategy_version TEXT NOT NULL,
     rule_fingerprint TEXT NOT NULL,
-    rotation_pool_json TEXT NOT NULL
+    rotation_pool_json TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'reference_pool',
+    pool_name TEXT NOT NULL DEFAULT 'reference-pool',
+    pool_version TEXT NOT NULL DEFAULT 'unknown',
+    pool_component_count INTEGER NOT NULL DEFAULT 0,
+    transaction_date TEXT,
+    coverage_count INTEGER NOT NULL DEFAULT 0,
+    coverage_total INTEGER NOT NULL DEFAULT 0,
+    coverage_pct REAL,
+    data_status TEXT NOT NULL DEFAULT 'degraded',
+    degraded_reasons_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS scan_run_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +162,22 @@ class CandidateRepository:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(candidate_items)")}
             if "rule_fingerprint" not in columns:
                 connection.execute("ALTER TABLE candidate_items ADD COLUMN rule_fingerprint TEXT NOT NULL DEFAULT 'legacy-unknown'")
+            scan_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scan_runs)")}
+            migrations = {
+                "scope": "TEXT NOT NULL DEFAULT 'reference_pool'",
+                "pool_name": "TEXT NOT NULL DEFAULT 'reference-pool'",
+                "pool_version": "TEXT NOT NULL DEFAULT 'unknown'",
+                "pool_component_count": "INTEGER NOT NULL DEFAULT 0",
+                "transaction_date": "TEXT",
+                "coverage_count": "INTEGER NOT NULL DEFAULT 0",
+                "coverage_total": "INTEGER NOT NULL DEFAULT 0",
+                "coverage_pct": "REAL",
+                "data_status": "TEXT NOT NULL DEFAULT 'degraded'",
+                "degraded_reasons_json": "TEXT NOT NULL DEFAULT '[]'",
+            }
+            for name, definition in migrations.items():
+                if name not in scan_columns:
+                    connection.execute(f"ALTER TABLE scan_runs ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)
@@ -249,12 +275,18 @@ class CandidateRepository:
             cursor = connection.execute(
                 """INSERT INTO scan_runs
                 (started_at, completed_at, source, total, succeeded, degraded, failed, scoreable,
-                 strategy_id, strategy_version, rule_fingerprint, rotation_pool_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 strategy_id, strategy_version, rule_fingerprint, rotation_pool_json,
+                 scope, pool_name, pool_version, pool_component_count, transaction_date,
+                 coverage_count, coverage_total, coverage_pct, data_status, degraded_reasons_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (result.started_at.isoformat(), result.completed_at.isoformat(), result.source,
                  result.total, result.succeeded, result.degraded, result.failed, result.scoreable,
                  first.strategy_id if first else "group-original", first.strategy_version if first else "unknown",
-                 result.rule_fingerprint, json.dumps(result.rotation_pool_codes)),
+                 result.rule_fingerprint, json.dumps(result.rotation_pool_codes), result.scope,
+                 result.pool_name, result.pool_version, result.pool_component_count,
+                 result.transaction_date.isoformat() if result.transaction_date else None,
+                 result.coverage_count, result.coverage_total, result.coverage_pct, result.data_status,
+                 json.dumps(result.degraded_reasons, ensure_ascii=False)),
             )
             run_id = int(cursor.lastrowid)
             for rank, item in enumerate(result.items, start=1):
@@ -292,6 +324,10 @@ class CandidateRepository:
         return [MarketReviewRun(
             run_id=row["id"], completed_at=datetime.fromisoformat(row["completed_at"]), source=row["source"],
             total=row["total"], scoreable=row["scoreable"], average_change_pct=self._scan_average_change(row["id"]),
+            scope=row["scope"], pool_name=row["pool_name"], pool_version=row["pool_version"],
+            pool_component_count=row["pool_component_count"],
+            transaction_date=date.fromisoformat(row["transaction_date"]) if row["transaction_date"] else None,
+            coverage_pct=row["coverage_pct"], data_status=row["data_status"],
         ) for row in rows]
 
     def market_review(self, run_id: int | None = None) -> MarketReviewResponse:
@@ -336,12 +372,24 @@ class CandidateRepository:
             total=run["total"], succeeded=run["succeeded"], degraded=run["degraded"], failed=run["failed"], scoreable=run["scoreable"],
             up_count=up_count, down_count=down_count, flat_count=len(changes) - up_count - down_count,
             breadth_pct=round(up_count / len(changes) * 100, 2) if changes else None,
+            sample_up_rate_pct=round(up_count / len(changes) * 100, 2) if changes else None,
+            change_sample_count=len(changes),
             average_change_pct=round(sum(changes) / len(changes), 2) if changes else None,
             average_score=round(sum(score_values) / len(score_values), 2) if score_values else None,
+            strategy_average_score=round(sum(score_values) / len(score_values), 2) if score_values else None,
+            strategy_scoreable=len(score_values),
             rotation_pool_codes=json.loads(run["rotation_pool_json"]),
             top_gainers=sorted(items, key=lambda item: item.change_pct if item.change_pct is not None else -999, reverse=True)[:10],
             top_scores=sorted((item for item in items if item.score is not None), key=lambda item: item.score or -999, reverse=True)[:10],
             sectors=sector_rows[:12],
+            scope=run["scope"], pool_name=run["pool_name"], pool_version=run["pool_version"],
+            pool_component_count=run["pool_component_count"],
+            transaction_date=date.fromisoformat(run["transaction_date"]) if run["transaction_date"] else None,
+            scan_started_at=datetime.fromisoformat(run["started_at"]),
+            scan_completed_at=datetime.fromisoformat(run["completed_at"]),
+            coverage_count=run["coverage_count"], coverage_total=run["coverage_total"],
+            coverage_pct=run["coverage_pct"], data_status=run["data_status"],
+            degraded_reasons=json.loads(run["degraded_reasons_json"] or "[]"),
         )
 
     def _scan_average_change(self, run_id: int) -> float | None:

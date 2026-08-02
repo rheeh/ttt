@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +28,7 @@ class StockPool:
         self.path = path
         data = json.loads(path.read_text(encoding="utf-8"))
         self.version = data["version"]
+        self.name = data.get("source", path.stem)
         self.stocks = [StockPreset(**item, asset_type="stock") for item in data["stocks"]]
         self.etfs = [StockPreset(**item, asset_type="etf") for item in data["etfs"]]
 
@@ -82,6 +84,14 @@ class MarketScanner:
                 item.score = self.engine.score(score_input)
         items.sort(key=lambda item: item.score.total_score if item.score else -10_000, reverse=True)
         completed_at = datetime.now(timezone.utc)
+        trade_dates = [quote.trade_at.date() for quote in quotes if quote.trade_at]
+        coverage_count = sum(item.quote.status != "error" for item in items)
+        coverage_total = len(items)
+        missing_counts = Counter(field for item in items for field in item.quote.missing_fields)
+        degraded_reasons = [f"{field} 缺失 {count}/{coverage_total}" for field, count in missing_counts.most_common(5)]
+        if any(item.quote.status == "error" for item in items):
+            degraded_reasons.insert(0, f"行情请求失败 {sum(item.quote.status == 'error' for item in items)}/{coverage_total}")
+        data_status = "error" if coverage_total and coverage_count == 0 else "degraded" if degraded_reasons else "ok"
         return MarketScanResponse(
             started_at=started_at, completed_at=completed_at,
             source="+".join(filter(None, [self.provider.name, self.history_provider.name if self.history_provider else None])),
@@ -91,6 +101,11 @@ class MarketScanner:
             scoreable=sum(item.score is not None for item in items),
             rule_fingerprint=self.engine.rule_fingerprint,
             rotation_pool_codes=rotation_codes, items=items,
+            scope="reference_pool", pool_name=self.pool.name, pool_version=self.pool.version,
+            pool_component_count=len(presets), transaction_date=max(trade_dates) if trade_dates else None,
+            coverage_count=coverage_count, coverage_total=coverage_total,
+            coverage_pct=round(coverage_count / coverage_total * 100, 2) if coverage_total else None,
+            data_status=data_status, degraded_reasons=degraded_reasons,
         )
 
     @staticmethod

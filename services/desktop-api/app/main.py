@@ -16,9 +16,10 @@ from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
 from app.market.health import DataSourceHealthService
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
+from app.market.all_a_snapshot import AllAMarketSnapshotProvider
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    DataSourceHealthResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
+    AllAMarketSnapshot, DataSourceHealthResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
         history_provider=history_provider,
     )
     app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates)
+    app.state.all_a_snapshot = AllAMarketSnapshotProvider()
     yield
 
 
@@ -112,6 +114,12 @@ def market_review(request: Request, run_id: int | None = Query(default=None, ge=
 @app.get("/api/market/review/runs", response_model=list[MarketReviewRun])
 def market_review_runs(request: Request, limit: int = Query(default=30, ge=1, le=100)) -> list[MarketReviewRun]:
     return candidates(request).list_market_review_runs(limit=limit)
+
+
+@app.get("/api/market/all-a/snapshot", response_model=AllAMarketSnapshot)
+def all_a_snapshot(request: Request) -> AllAMarketSnapshot:
+    """Whole-A health only; never invokes StrategyEngine or reference-pool scores."""
+    return request.app.state.all_a_snapshot.fetch()
 
 
 @app.get("/api/market/snapshots", response_model=list[QuoteSnapshot])

@@ -6,6 +6,7 @@ from app.market.scanner import MarketScanner, StockPool
 from app.market.akshare import AkshareQuoteProvider, FallbackHistoryProvider, FallbackQuoteProvider
 from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
+from app.market.all_a_snapshot import AllAMarketSnapshotProvider
 from app.models import DailyIndicators, QuoteSnapshot
 from app.scoring import StrategyEngine
 import pytest
@@ -60,6 +61,20 @@ def test_tencent_parser_reads_extension_fund_flow_fields():
     assert quote.main_inflow_5d == 0.001307
     assert quote.main_inflow_10d == pytest.approx(0.000056)
     assert quote.fund_flow_ratio_estimated is not None
+
+
+def test_all_a_snapshot_is_health_only_and_tracks_coverage():
+    snapshot = AllAMarketSnapshotProvider.from_rows([
+        {"代码": "600519", "最新价": 1350, "涨跌幅": 1.2},
+        {"代码": "000001", "最新价": 10, "涨跌幅": -0.5},
+        {"代码": "300001", "最新价": "-", "涨跌幅": "-"},
+    ])
+    assert snapshot.scope == "all_a_market"
+    assert snapshot.total == 3 and snapshot.coverage_count == 2
+    assert snapshot.up_count == 1 and snapshot.down_count == 1
+    assert snapshot.sample_up_rate_pct == 50
+    assert snapshot.strategy_used is False and snapshot.strategy_scoreable == 0
+    assert snapshot.data_status == "degraded"
 
 
 def test_daily_parser_builds_moving_averages():
@@ -179,6 +194,14 @@ def test_market_review_summarizes_latest_scan(tmp_path):
     review = repo.market_review()
     assert review.run_id == run_id
     assert review.total == 4 and review.up_count == 4
+    assert review.scope == "reference_pool"
+    assert review.pool_name == "group-original"
+    assert review.pool_version == "1.0.0"
+    assert review.pool_component_count == 4
+    assert review.sample_up_rate_pct == 100
+    assert review.change_sample_count == 4
+    assert review.coverage_pct == 100
+    assert review.strategy_scoreable == 4
     assert review.top_scores and review.sectors
     runs = repo.list_market_review_runs()
     assert runs[0].run_id == run_id and runs[0].average_change_pct == 2.5
