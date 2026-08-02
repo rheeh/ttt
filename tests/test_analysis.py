@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.analysis.indicators import calculate_indicators
 from app.analysis.data_sources import FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts, NewsItem
+from app.analysis.local_industry import LocalIndustryProvider
 from app.analysis import data_sources
 from app.analysis import service as analysis_service_module
 from app.analysis.models import DailyBar
@@ -77,7 +78,7 @@ def test_industry_tries_alternate_hosts(monkeypatch):
             raise OSError("blocked")
         if "/api/qt/stock/get" in url:
             return {"data": {"f127": "白酒"}}
-        return {"data": {"diff": {"1": {"f14": "白酒", "f3": "1.2", "f62": "100000000"}}}}
+        return {"data": {"diff": [{"f14": "白酒", "f3": "1.2", "f62": "100000000"}]}}
 
     monkeypatch.setattr(data_sources, "_json_request", request)
     provider = data_sources.EastmoneyIndustryProvider()
@@ -114,6 +115,34 @@ def test_source_cache_does_not_use_expired_snapshot(tmp_path):
     assert expired.status == "error" and expired.cache_expired is True and expired.main_flow_ratio is None
 
 
+def test_tencent_fund_flow_fallback_is_explicitly_degraded():
+    service = IndividualAnalysisService(StockPool(POOL), FakeQuoteProvider())
+    quote = QuoteSnapshot(
+        stock_code="sh600519", stock_name="贵州茅台", price=1350, amount=7_373_460_000,
+        trade_at=datetime(2026, 7, 31, 8, tzinfo=timezone.utc), fetched_at=datetime.now(timezone.utc),
+        source="tencent-qt", status="degraded", main_inflow=0.115101,
+        main_inflow_5d=0.001307, main_inflow_10d=0.000056, fund_flow_ratio_estimated=0.00156,
+    )
+    result = service._fallback_fund_flow_from_quote(quote, FundFlowFacts(error="remote closed"))
+    assert result.status == "degraded"
+    assert result.source == "tencent-qt-extension"
+    assert result.endpoint == "qt.gtimg.cn"
+    assert result.ratio_kind == "estimated_from_main_inflow_and_turnover"
+    assert "非五档资金流" in (result.error or "")
+
+
+def test_local_industry_fallback_uses_constituent_quotes():
+    pool = StockPool(POOL)
+    provider = LocalIndustryProvider(pool, FakeQuoteProvider())
+    sector = pool.stocks[0].sector
+    result = provider.fetch(pool.stocks[0].code)
+    assert result.status == "degraded"
+    assert result.name == sector
+    assert result.constituent_count and result.up_count == result.constituent_count
+    assert result.main_inflow is None
+    assert "本地行业映射" in (result.error or "")
+
+
 class FakeQuoteProvider:
     def fetch(self, presets):
         now = datetime(2026, 7, 31, 8, tzinfo=timezone.utc)
@@ -128,7 +157,7 @@ class FakeAnalysisService(IndividualAnalysisService):
     def fetch_bars(self, code, days=252):
         return bars()
 
-    def fetch_supplementary(self, code, name):
+    def fetch_supplementary(self, code, name, quote=None):
         return (
             FundFlowFacts(trade_date="2026-07-31", main_inflow=1.2, main_flow_ratio=0.03, status="ok"),
             FinanceFacts(report_date="2026-06-30", revenue=100, revenue_yoy=12, profit=20, profit_yoy=18, status="ok"),

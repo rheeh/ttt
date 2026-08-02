@@ -12,6 +12,7 @@ from app.analysis.advice import build_advice
 from app.analysis.data_sources import EastmoneyFinanceProvider, EastmoneyFundFlowProvider, EastmoneyIndustryProvider, EastmoneyNewsProvider, FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts
 from app.analysis.diagnostics import ZHIXING_ALGORITHM_VERSION, ZHIXING_RULE_FINGERPRINT, build_diagnosis, build_factors, build_radar
 from app.analysis.indicators import aggregate_weekly, calculate_indicators, trend_series
+from app.analysis.local_industry import LocalIndustryProvider
 from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
 from app.market.scanner import StockPool
@@ -48,6 +49,12 @@ class IndividualAnalysisService:
         self.finance_provider = EastmoneyFinanceProvider(timeout_seconds)
         self.industry_provider = EastmoneyIndustryProvider(timeout_seconds)
         self.news_provider = EastmoneyNewsProvider(timeout_seconds)
+        # The derived industry fallback must not turn a failed supplement into
+        # a 20-second retry storm.  Use one short, no-retry Tencent batch.
+        local_quote_provider = TencentQuoteProvider(
+            timeout_seconds=min(timeout_seconds, 3), retries=0, chunk_size=100,
+        )
+        self.local_industry_provider = LocalIndustryProvider(self.pool, local_quote_provider)
 
     def analyze(self, request: AnalysisRequest) -> AnalysisReport:
         preset = self.resolve(request.stock)
@@ -58,7 +65,7 @@ class IndividualAnalysisService:
         weekly = calculate_indicators(weekly_bars)
         benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
         benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
-        fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name)
+        fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name, quote)
         core_missing = [field for field in quote.missing_fields if field in {"price", "change_pct", "pe", "pb", "turnover_pct", "amplitude_pct"}]
         if not bars:
             core_missing.append("daily_bars")
@@ -69,6 +76,15 @@ class IndividualAnalysisService:
             sector_rank=industry.rank, volume_ratio=technical.volume_ratio, inout_ratio=None,
             macd=technical.macd, revenue_growth=finance.revenue_yoy,
         )
+        if fund_flow.source == "tencent-qt-extension":
+            rocket = rocket.model_copy(update={
+                "dimensions": [
+                    dimension.model_copy(update={
+                        "reasons": dimension.reasons + ["腾讯扩展字段估算，非东方财富五档资金流"]
+                    }) if dimension.key == "fund" else dimension
+                    for dimension in rocket.dimensions
+                ]
+            })
         legacy_missing = rocket.missing_fields
         enrichment_missing = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status in {"error", "degraded"}]
         enrichment_stale = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status == "stale"]
@@ -79,6 +95,14 @@ class IndividualAnalysisService:
             benchmark=benchmark, sector_rank=industry.rank, in_reference_pool=preset.code in self.by_code,
             fund_flow_ratio=fund_flow.main_flow_ratio, revenue_growth=finance.revenue_yoy,
         )
+        if fund_flow.source == "tencent-qt-extension":
+            factors = [
+                factor.model_copy(update={
+                    "reason": f"{factor.reason}；腾讯扩展字段估算，非东方财富五档资金流",
+                    "source": "tencent-qt-extension",
+                }) if factor.key == "volume_fund" else factor
+                for factor in factors
+            ]
         available_count = sum(factor.available for factor in factors)
         total_factors = len(factors)
         zhixing_raw_score = round(sum(factor.score if factor.available else 50 for factor in factors) / total_factors, 2) if total_factors else 50
@@ -132,7 +156,7 @@ class IndividualAnalysisService:
             weekly_bars=weekly_bars,
         )
 
-    def fetch_supplementary(self, code: str, name: str):
+    def fetch_supplementary(self, code: str, name: str, quote: QuoteSnapshot | None = None):
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
                 "fund_flow": executor.submit(self.fund_flow_provider.fetch, code),
@@ -141,17 +165,43 @@ class IndividualAnalysisService:
                 "news": executor.submit(self.news_provider.fetch, name),
             }
             raw = tuple(futures[key].result() for key in ("fund_flow", "finance", "industry", "news"))
+        fund_flow = raw[0]
+        if fund_flow.status == "error" and quote is not None:
+            fund_flow = self._fallback_fund_flow_from_quote(quote, fund_flow)
+        industry = raw[2]
+        if industry.status == "error":
+            local_industry = self.local_industry_provider.fetch(code)
+            if local_industry.status != "error":
+                industry = local_industry
         return (
-            self._with_cache(code, raw[0], FundFlowFacts),
+            self._with_cache(code, fund_flow, FundFlowFacts),
             self._with_cache(code, raw[1], FinanceFacts),
-            self._with_cache(code, raw[2], IndustryFacts),
+            self._with_cache(code, industry, IndustryFacts),
             self._with_cache(code, raw[3], NewsFacts),
+        )
+
+    @staticmethod
+    def _fallback_fund_flow_from_quote(quote: QuoteSnapshot, failed: FundFlowFacts) -> FundFlowFacts:
+        if quote.main_inflow is None:
+            return failed
+        trade_date = quote.trade_at.date().isoformat() if quote.trade_at else None
+        return FundFlowFacts(
+            trade_date=trade_date,
+            main_inflow=quote.main_inflow,
+            main_flow_ratio=quote.fund_flow_ratio_estimated,
+            main_inflow_5d=quote.main_inflow_5d,
+            main_inflow_10d=quote.main_inflow_10d,
+            source="tencent-qt-extension",
+            endpoint="qt.gtimg.cn",
+            status="degraded",
+            ratio_kind="estimated_from_main_inflow_and_turnover" if quote.fund_flow_ratio_estimated is not None else None,
+            error=f"东方财富资金流获取失败，使用腾讯行情扩展字段（非五档资金流）：{failed.error or 'unknown error'}",
         )
 
     def _with_cache(self, code: str, result: Any, model_type: Type[Any]) -> Any:
         now = datetime.now(timezone.utc)
         age = max(0.0, (now - result.fetched_at).total_seconds())
-        if result.status == "ok":
+        if result.status == "ok" or result.source == "tencent-qt-extension":
             fresh = result.model_copy(update={"data_age_seconds": round(age, 1)})
             if self.cache is not None:
                 self.cache.save_source_cache(code, result.source, result.fetched_at.isoformat(), fresh.model_dump(mode="json"))

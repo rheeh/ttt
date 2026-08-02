@@ -16,6 +16,9 @@ class FundFlowFacts(BaseModel):
     trade_date: str | None = None
     main_inflow: float | None = None
     main_flow_ratio: float | None = None
+    main_inflow_5d: float | None = None
+    main_inflow_10d: float | None = None
+    ratio_kind: str | None = None
     small_inflow: float | None = None
     medium_inflow: float | None = None
     large_inflow: float | None = None
@@ -51,6 +54,12 @@ class IndustryFacts(BaseModel):
     total: int | None = None
     change_pct: float | None = None
     main_inflow: float | None = None
+    constituent_count: int | None = None
+    up_count: int | None = None
+    down_count: int | None = None
+    average_amount: float | None = None
+    leader_name: str | None = None
+    leader_change_pct: float | None = None
     source: str = "eastmoney-industry"
     endpoint: str | None = None
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -245,7 +254,8 @@ class EastmoneyIndustryProvider:
         }
         urls = [f"https://{host}/api/qt/clist/get?{urlencode(params)}" for host in self._hosts]
         payload, endpoint = _json_request_any(urls, self.timeout_seconds)
-        rows = list(((payload.get("data") or {}).get("diff") or {}).values())
+        diff = (payload.get("data") or {}).get("diff") or []
+        rows = list(diff.values()) if isinstance(diff, dict) else list(diff)
         self._cache = (now, rows, endpoint)
         return rows, endpoint
 

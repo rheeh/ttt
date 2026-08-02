@@ -80,6 +80,15 @@ class TencentQuoteProvider:
                 "pe": cls._number(fields[39]), "pb": cls._number(fields[46]),
                 "turnover_pct": cls._number(fields[38]), "amplitude_pct": cls._number(fields[43]),
             }
+            # Undocumented Tencent extensions: p[68]/p[70]/p[71] have been
+            # observed as current/5-day/10-day main-flow amounts in 万元.
+            # Keep them separate from the formal five-level flow fields and
+            # normalize to 亿元 for an explicitly labelled fallback source.
+            extension_main = cls._scaled_fund_flow(fields[68]) if len(fields) > 68 else None
+            extension_main_5d = cls._scaled_fund_flow(fields[70]) if len(fields) > 70 else None
+            extension_main_10d = cls._scaled_fund_flow(fields[71]) if len(fields) > 71 else None
+            amount = cls._scaled_amount(fields[37])
+            extension_ratio = extension_main / (amount / 1e8) if extension_main is not None and amount and amount > 0 else None
             missing = [name for name, value in required.items() if value is None or (name in {"price", "pe", "pb"} and value <= 0)]
             missing.extend(["main_flow_ratio", "quality_score", "ma5", "ma10", "ma20"])
             status = "error" if price is None or price <= 0 else "degraded" if missing else "ok"
@@ -89,7 +98,9 @@ class TencentQuoteProvider:
                 high=cls._number(fields[33]), low=cls._number(fields[34]),
                 change_pct=required["change_pct"], turnover_pct=required["turnover_pct"],
                 amplitude_pct=required["amplitude_pct"], pe=required["pe"], pb=required["pb"],
-                volume=cls._number(fields[6]), amount=cls._scaled_amount(fields[37]),
+                volume=cls._number(fields[6]), amount=amount,
+                main_inflow=extension_main, main_inflow_5d=extension_main_5d,
+                main_inflow_10d=extension_main_10d, fund_flow_ratio_estimated=extension_ratio,
                 trade_at=trade_at, fetched_at=fetched_at, source=cls.name,
                 status=status, missing_fields=missing,
                 error="invalid or missing latest price" if status == "error" else None,
@@ -107,6 +118,11 @@ class TencentQuoteProvider:
     def _scaled_amount(cls, value: str) -> float | None:
         number = cls._number(value)
         return number * 10_000 if number is not None else None
+
+    @classmethod
+    def _scaled_fund_flow(cls, value: str) -> float | None:
+        number = cls._number(value)
+        return number / 10_000 if number is not None else None
 
     @staticmethod
     def _trade_datetime(value: str) -> datetime | None:

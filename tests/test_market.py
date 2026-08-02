@@ -8,6 +8,7 @@ from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.models import DailyIndicators, QuoteSnapshot
 from app.scoring import StrategyEngine
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
@@ -42,6 +43,23 @@ def test_tencent_parser_normalizes_source_and_freshness():
     assert quote.trade_at.isoformat() == "2026-07-31T16:14:50+08:00"
     assert quote.status == "degraded"
     assert "main_flow_ratio" in quote.missing_fields
+
+
+def test_tencent_parser_reads_extension_fund_flow_fields():
+    fields = [""] * 87
+    values = {
+        1: "贵州茅台", 3: "1350.60", 4: "1361.76", 5: "1330.03", 6: "55128",
+        30: "20260731161450", 32: "-0.82", 33: "1355.72", 34: "1325.77",
+        37: "737346", 38: "0.44", 39: "20.41", 43: "2.20", 46: "7.25",
+        68: "1151.01", 70: "13.07", 71: "0.56",
+    }
+    for index, value in values.items():
+        fields[index] = value
+    quote = TencentQuoteProvider.parse_response('v_sh600519="' + "~".join(fields) + '";')["sh600519"]
+    assert quote.main_inflow == 0.115101
+    assert quote.main_inflow_5d == 0.001307
+    assert quote.main_inflow_10d == pytest.approx(0.000056)
+    assert quote.fund_flow_ratio_estimated is not None
 
 
 def test_daily_parser_builds_moving_averages():

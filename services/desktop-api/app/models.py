@@ -179,6 +179,13 @@ class QuoteSnapshot(BaseModel):
     volume: float | None = None
     amount: float | None = None
     main_flow_ratio: float | None = None
+    # Tencent's undocumented extension fields (p[68]/p[70]/p[71]).  Values
+    # are normalized to 亿元 and are only used as an explicitly labelled
+    # fallback when the formal five-level flow endpoint is unavailable.
+    main_inflow: float | None = None
+    main_inflow_5d: float | None = None
+    main_inflow_10d: float | None = None
+    fund_flow_ratio_estimated: float | None = None
     trade_at: datetime | None = None
     fetched_at: datetime
     source: str
