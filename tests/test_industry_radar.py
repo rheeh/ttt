@@ -1,5 +1,4 @@
 import sys
-from datetime import datetime, timezone
 
 from app.market.industry_radar import IndustryRadarProvider
 
@@ -14,25 +13,35 @@ class FakeFrame:
 
 class FakeAkshare:
     @staticmethod
-    def stock_board_industry_name_em():
-        return FakeFrame([{"板块名称": "示例行业", "涨跌幅": "1.2"}])
+    def stock_sector_spot(indicator):
+        assert indicator == "新浪行业"
+        return FakeFrame([{"label": "hangye_1", "板块": "示例行业", "涨跌幅": "1.2", "公司家数": 2}])
 
     @staticmethod
-    def stock_board_industry_hist_em(**_kwargs):
-        raise OSError("history unavailable")
+    def stock_sector_detail(sector):
+        assert sector == "hangye_1"
+        return FakeFrame([{"changepercent": "2.0"}, {"changepercent": "-1.0"}])
 
 
-def test_radar_does_not_fallback_to_legacy_pool(monkeypatch):
+def test_radar_uses_sina_industry_snapshot(monkeypatch):
     monkeypatch.setitem(sys.modules, "akshare", FakeAkshare)
     result = IndustryRadarProvider().fetch()
     assert result.scope == "all_industries"
-    assert result.coverage_count == 0
+    assert result.source == "sina-industry-radar"
+    assert result.other[0].name == "示例行业"
+    assert result.other[0].stage == "数据不足"
+    assert result.other[0].up_count == 1
+    assert "历史K线" in result.degraded_reasons[0]
+
+
+def test_radar_does_not_call_eastmoney_fallback(monkeypatch):
+    class NoDataAkshare:
+        @staticmethod
+        def stock_sector_spot(indicator):
+            raise OSError("sina unavailable")
+
+    monkeypatch.setitem(sys.modules, "akshare", NoDataAkshare)
+    result = IndustryRadarProvider().fetch()
     assert result.data_status == "error"
-    assert result.other[0].risks == ["历史行情不可用：history unavailable"]
-
-
-def test_radar_error_item_is_explicitly_unscored():
-    item = IndustryRadarProvider._error_item("示例行业", datetime.now(timezone.utc), "no data")
-    assert item.score is None
-    assert item.status == "error"
-    assert item.stage == "下跌中"
+    assert "新浪行业数据暂时不可用" in result.degraded_reasons[0]
+    assert "eastmoney" not in result.source

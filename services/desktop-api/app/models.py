@@ -348,7 +348,7 @@ class AllAMarketSnapshot(BaseModel):
     strategy_scoreable: int = 0
 
 
-IndustryStage = Literal["下跌中", "低位企稳", "底部改善", "突破确认", "高位拥挤"]
+IndustryStage = Literal["下跌中", "低位企稳", "底部改善", "突破确认", "高位拥挤", "数据不足"]
 
 
 class IndustryRadarItem(BaseModel):

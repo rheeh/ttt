@@ -71,7 +71,7 @@ export type StockSearchResult = {code: string; name: string; market?: string; as
 export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}
 
 export type IndustryRadarItem = {
-  name: string; stage: '下跌中'|'低位企稳'|'底部改善'|'突破确认'|'高位拥挤'; score?: number;
+  name: string; stage: '下跌中'|'低位企稳'|'底部改善'|'突破确认'|'高位拥挤'|'数据不足'; score?: number;
   low_position_score?: number; deceleration_score?: number; breadth_score?: number;
   volume_price_score?: number; relative_strength_score?: number; change_pct?: number;
   return_5d_pct?: number; return_20d_pct?: number; drawdown_1y_pct?: number;
