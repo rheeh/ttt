@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, time, timedelta, timezone
 from statistics import mean, pstdev
 
 from app.analysis.models import DailyBar, MacdIndicator, TechnicalIndicators, TrendPoint
@@ -23,15 +24,22 @@ def _ema(values: list[float], period: int) -> list[float]:
 def calculate_rsi(values: list[float], period: int = 14) -> float | None:
     if len(values) < period + 1:
         return None
-    gains: list[float] = []
-    losses: list[float] = []
-    for index in range(len(values) - period, len(values)):
-        delta = values[index] - values[index - 1]
-        gains.append(max(delta, 0))
-        losses.append(max(-delta, 0))
-    average_gain, average_loss = mean(gains), mean(losses)
+    # Wilder's RSI uses an initial arithmetic mean followed by Wilder's
+    # recursive moving average (equivalent to RMA), not a rolling mean of the
+    # last 14 bars. This also keeps a flat series neutral at 50.
+    deltas = [values[index] - values[index - 1] for index in range(1, len(values))]
+    gains = [max(delta, 0) for delta in deltas]
+    losses = [max(-delta, 0) for delta in deltas]
+    average_gain, average_loss = mean(gains[:period]), mean(losses[:period])
+    for gain, loss in zip(gains[period:], losses[period:]):
+        average_gain = (average_gain * (period - 1) + gain) / period
+        average_loss = (average_loss * (period - 1) + loss) / period
+    if average_gain == 0 and average_loss == 0:
+        return 50.0
     if average_loss == 0:
         return 100.0
+    if average_gain == 0:
+        return 0.0
     return round(100 - 100 / (1 + average_gain / average_loss), 2)
 
 
@@ -56,7 +64,9 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
     recent = bars[-20:]
     current_volume = bars[-1].volume
     previous_volumes = [bar.volume for bar in bars[-6:-1] if bar.volume > 0]
-    volume_ratio = round(current_volume / mean(previous_volumes), 4) if previous_volumes and current_volume >= 0 else None
+    local_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    intraday = bars[-1].trade_date == local_now.date() and local_now.time() < time(15, 5)
+    volume_ratio = None if intraday else round(current_volume / mean(previous_volumes), 4) if previous_volumes and current_volume >= 0 else None
     ma5, ma10, ma20, ma60 = (_ma(closes, period) for period in (5, 10, 20, 60))
     last = closes[-1]
     atr_values: list[float] = []
@@ -84,7 +94,8 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
         macd=calculate_macd(closes), support20=round(min(bar.low for bar in recent), 4) if recent else None,
         resistance20=round(max(bar.high for bar in recent), 4) if recent else None,
         high52w=round(max(bar.high for bar in bars[-252:]), 4), low52w=round(min(bar.low for bar in bars[-252:]), 4),
-        volume_ratio=volume_ratio, trend=trend, bar_count=len(bars), atr14=atr14,
+        volume_ratio=volume_ratio, volume_ratio_basis="intraday_unavailable" if intraday else "completed_day",
+        trend=trend, bar_count=len(bars), atr14=atr14,
         bollinger_width=bollinger_width, return_20d_pct=return_20d_pct, return_60d_pct=return_60d_pct,
     )
 

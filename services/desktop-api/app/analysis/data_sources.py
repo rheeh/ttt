@@ -35,10 +35,12 @@ class FundFlowFacts(BaseModel):
 
 class FinanceFacts(BaseModel):
     report_date: str | None = None
+    notice_date: str | None = None
     revenue: float | None = None
     revenue_yoy: float | None = None
     profit: float | None = None
     profit_yoy: float | None = None
+    roe: float | None = None
     source: str = "eastmoney-finance"
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "error"
@@ -184,7 +186,7 @@ class EastmoneyFinanceProvider:
         clean, suffix = code[2:], ".SZ" if code.startswith("sz") else ".SH"
         params = {
             "reportName": "RPT_F10_FINANCE_MAINFINADATA",
-            "columns": "SECUCODE,NOTICE_DATE,PARENTNETPROFIT,TOTALOPERATEREVE,TOTALOPERATEREVETZ,PARENTNETPROFITTZ",
+            "columns": "SECUCODE,REPORT_DATE,NOTICE_DATE,PARENTNETPROFIT,TOTALOPERATEREVE,TOTALOPERATEREVETZ,PARENTNETPROFITTZ,ROEJQ",
             "filter": f'(SECUCODE in ("{clean}{suffix}"))', "pageNumber": 1, "pageSize": 6,
             "sortTypes": "-1", "sortColumns": "NOTICE_DATE",
         }
@@ -195,9 +197,10 @@ class EastmoneyFinanceProvider:
                 raise ValueError("no finance row")
             row = rows[0]
             return FinanceFacts(
-                report_date=str(row.get("NOTICE_DATE") or "")[:10], revenue=_number(row.get("TOTALOPERATEREVE")),
+                report_date=str(row.get("REPORT_DATE") or "")[:10], notice_date=str(row.get("NOTICE_DATE") or "")[:10],
+                revenue=_number(row.get("TOTALOPERATEREVE")),
                 revenue_yoy=_number(row.get("TOTALOPERATEREVETZ")), profit=_number(row.get("PARENTNETPROFIT")),
-                profit_yoy=_number(row.get("PARENTNETPROFITTZ")), status="ok",
+                profit_yoy=_number(row.get("PARENTNETPROFITTZ")), roe=_number(row.get("ROEJQ")), status="ok",
             )
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
             return FinanceFacts(error=str(exc))

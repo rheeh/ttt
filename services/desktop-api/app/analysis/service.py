@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Type
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -81,8 +81,6 @@ class IndividualAnalysisService:
         legacy_missing = rocket.missing_fields
         enrichment_missing = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status in {"error", "degraded"}]
         enrichment_stale = [name for name, source in (("fund_flow", fund_flow), ("finance_growth", finance), ("industry_heat", industry), ("news", news)) if source.status == "stale"]
-        advice = build_advice(pe=quote.pe, roe=None, score=rocket.score, technical=technical,
-                              is_holding=request.is_holding, position_cost=request.position_cost)
         factors = build_factors(
             price=quote.price, change_pct=quote.change_pct, daily=technical, weekly=weekly,
             benchmark=benchmark, sector_rank=industry.rank,
@@ -100,8 +98,21 @@ class IndividualAnalysisService:
         total_factors = len(factors)
         zhixing_raw_score = round(sum(factor.score if factor.available else 50 for factor in factors) / total_factors, 2) if total_factors else 50
         zhixing_index = zhixing_raw_score
-        zhixing_confidence = round(available_count / total_factors * 100, 2) if total_factors else 0
+        # Formal feeds count fully; the undocumented Tencent fund-flow
+        # extension is only a weak proxy. Keyword news is a small signal.
+        factor_weight = sum(
+            0 if not factor.available else .3 if factor.source == "tencent-qt-extension" else 1
+            for factor in factors
+        )
+        confidence_denominator = total_factors + .2
+        confidence_numerator = factor_weight + (.2 if news.status == "ok" else .14 if news.status == "stale" else .04 if news.status == "degraded" else 0)
+        zhixing_confidence = round(confidence_numerator / confidence_denominator * 100, 2) if confidence_denominator else 0
         zhixing_level = "强势" if zhixing_index >= 80 else "偏强" if zhixing_index >= 60 else "中性" if zhixing_index >= 40 else "偏弱"
+        advice = build_advice(
+            price=quote.price, pe=quote.pe, roe=finance.roe, score=zhixing_index,
+            confidence=zhixing_confidence, technical=technical, is_holding=request.is_holding,
+            position_cost=request.position_cost, core_complete=not core_missing and bool(bars),
+        )
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
         diagnosis = diagnosis.model_copy(update={
@@ -223,10 +234,17 @@ class IndividualAnalysisService:
     def _freshness(self, quote: Any, bars: list[DailyBar], sources: dict[str, Any]) -> dict[str, dict]:
         now = datetime.now(timezone.utc)
         quote_age = max(0.0, (now - quote.fetched_at).total_seconds()) if quote.fetched_at else None
+        local_today = now.astimezone(timezone(timedelta(hours=8))).date()
+        expected_trade_date = local_today
+        while expected_trade_date.weekday() >= 5:
+            expected_trade_date -= timedelta(days=1)
+        quote_trade_date = quote.trade_at.date() if quote.trade_at else None
         result: dict[str, dict] = {
             "quote": self._freshness_entry("quote", quote.status, quote_age, quote.fetched_at,
                                             threshold=self.FRESHNESS_THRESHOLDS["quote"],
-                                            trade_at=quote.trade_at),
+                                            trade_at=quote.trade_at,
+                                            latest_trade_date=quote_trade_date,
+                                            expected_trade_date=expected_trade_date),
             "daily_bars": {
                 "label": "日线",
                 "state": "fresh" if bars else "unknown",
@@ -249,11 +267,14 @@ class IndividualAnalysisService:
     def _freshness_entry(key: str, status: str, age: float | None, fetched_at: datetime | None,
                          threshold: float, cache_used: bool = False, cache_expired: bool = False,
                          trade_at: datetime | None = None, report_date: str | None = None,
-                         trade_date: str | None = None) -> dict:
+                         trade_date: str | None = None, latest_trade_date: date | None = None,
+                         expected_trade_date: date | None = None) -> dict:
         if status == "error":
             state = "expired" if cache_expired else "error"
         elif status == "stale" or cache_used:
             state = "stale"
+        elif latest_trade_date and expected_trade_date and latest_trade_date < expected_trade_date:
+            state = "warning"
         elif age is not None and age > threshold:
             state = "warning"
         else:
@@ -261,6 +282,9 @@ class IndividualAnalysisService:
         return {
             "key": key, "state": state, "fetched_at": fetched_at.isoformat() if fetched_at else None,
             "trade_at": trade_at.isoformat() if trade_at else None, "trade_date": trade_date,
+            "latest_trade_date": latest_trade_date.isoformat() if latest_trade_date else None,
+            "expected_trade_date": expected_trade_date.isoformat() if expected_trade_date else None,
+            "freshness_basis": "交易日优先，抓取时间辅助",
             "report_date": report_date, "age_seconds": round(age, 1) if age is not None else None,
             "warning_threshold_seconds": threshold, "cache_used": cache_used,
             "cache_expired": cache_expired,

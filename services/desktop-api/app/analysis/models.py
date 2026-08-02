@@ -35,6 +35,7 @@ class TechnicalIndicators(BaseModel):
     high52w: float | None = None
     low52w: float | None = None
     volume_ratio: float | None = None
+    volume_ratio_basis: Literal["completed_day", "intraday_unavailable"] | None = None
     trend: Literal["强势上涨", "上涨", "震荡", "下跌", "快速下跌", "数据不足"] = "数据不足"
     bar_count: int = 0
     atr14: float | None = None
@@ -105,6 +106,11 @@ class Advice(BaseModel):
     risk_level: Literal["低", "中", "高"]
     operations: list[str] = Field(default_factory=list)
     zones: list[PriceZone] = Field(default_factory=list)
+    triggered_conditions: list[str] = Field(default_factory=list)
+    unmet_conditions: list[str] = Field(default_factory=list)
+    invalidation_conditions: list[str] = Field(default_factory=list)
+    data_confidence: float = Field(default=0, ge=0, le=100)
+    review_after: str = "下一个交易日收盘后"
 
 
 class AnalysisRequest(BaseModel):

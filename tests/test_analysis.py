@@ -3,7 +3,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.analysis.indicators import calculate_indicators
+from app.analysis.indicators import calculate_indicators, calculate_rsi
+from app.analysis.advice import build_advice
 from app.analysis.data_sources import FinanceFacts, FundFlowFacts, IndustryFacts, NewsFacts, NewsItem
 from app.analysis.local_industry import LocalIndustryProvider
 from app.analysis import data_sources
@@ -34,6 +35,25 @@ def test_indicators_calculate_macd_rsi_and_levels():
     assert result.macd is not None
     assert result.rsi14 == 100
     assert result.support20 < result.resistance20
+
+
+def test_rsi_uses_wilder_smoothing_and_flat_series_is_neutral():
+    assert calculate_rsi([100] * 30) == 50
+    # A rising series followed by a pullback is below the naive last-14-bar
+    # result when Wilder's recursive smoothing is applied.
+    values = [100, 102, 104, 103, 105, 107, 106, 108, 110, 109, 111, 113, 112, 114, 116, 115, 117, 119, 118, 120, 121, 119, 120, 118, 119, 117]
+    assert calculate_rsi(values) == 64.58
+
+
+def test_advice_uses_zhixing_score_and_requires_conditions():
+    technical = calculate_indicators(bars())
+    strong = build_advice(price=18, pe=20, roe=10, score=70, confidence=85, technical=technical,
+                          is_holding=False, position_cost=None, core_complete=True)
+    weak = build_advice(price=18, pe=20, roe=10, score=40, confidence=85, technical=technical,
+                        is_holding=False, position_cost=None, core_complete=True)
+    assert strong.action == "建仓"
+    assert weak.action == "观望"
+    assert strong.data_confidence == 85
 
 
 def test_eastmoney_fund_flow_and_finance_parsers(monkeypatch):

@@ -124,15 +124,15 @@ def build_diagnosis(*, price: float | None, daily: TechnicalIndicators, weekly: 
     if daily.volume_ratio and daily.volume_ratio < .8:
         risks.append("上涨缺少量能确认")
     if daily.resistance20 and price and price >= daily.resistance20 * .95:
-        risks.append(f"接近20日压力 {daily.resistance20:.2f}")
+        risks.append(f"接近20日区间上沿 {daily.resistance20:.2f}")
     if daily.trend in {"强势上涨", "上涨"} and weekly.trend in {"下跌", "快速下跌"}:
         conflicts.append("日线偏强、周线偏弱，短线存在周期分歧")
     if daily.trend in {"下跌", "快速下跌"} and weekly.trend in {"强势上涨", "上涨"}:
         conflicts.append("日线回落但周线尚未破坏，中短周期方向不一致")
     if daily.support20:
-        reassess.append(f"放量跌破支撑 {daily.support20:.2f} 时重新评估")
+        reassess.append(f"放量跌破20日区间下沿 {daily.support20:.2f} 时重新评估")
     if daily.resistance20:
-        reassess.append(f"放量突破压力 {daily.resistance20:.2f} 后重新评估")
+        reassess.append(f"放量突破20日区间上沿 {daily.resistance20:.2f} 后重新评估")
     if not positives:
         positives.append("当前没有足够的积极技术证据")
     if not risks:
