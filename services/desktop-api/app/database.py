@@ -10,7 +10,7 @@ from statistics import median
 from app.analysis.models import AnalysisReport
 from app.models import (
     CandidateCreate, CandidateItem, CandidateUpdate, DataSourceHealth, MarketReviewResponse, MarketReviewItem, MarketReviewRun, MarketScanResponse, MarketSectorReview,
-    PerformanceHorizonSummary, PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
+    IndustryRadarResponse, PerformanceHorizonSummary, PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
 )
 
 
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS candidate_items (
     status TEXT NOT NULL CHECK (status IN ('new', 'watching', 'ready', 'abandoned', 'validated')),
     note TEXT,
     price_zones_json TEXT NOT NULL,
+    signal_context_json TEXT NOT NULL DEFAULT '{}',
+    signal_fingerprint TEXT,
     UNIQUE(stock_code, strategy_id, strategy_version, selected_at)
 );
 CREATE INDEX IF NOT EXISTS ix_candidates_selected_at ON candidate_items(selected_at DESC);
@@ -89,7 +91,7 @@ CREATE INDEX IF NOT EXISTS ix_scan_items_run_rank ON scan_run_items(run_id, rank
 CREATE TABLE IF NOT EXISTS candidate_performance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     candidate_id INTEGER NOT NULL REFERENCES candidate_items(id) ON DELETE CASCADE,
-    horizon TEXT NOT NULL CHECK (horizon IN ('1d', '5d', '20d')),
+    horizon TEXT NOT NULL CHECK (horizon IN ('1d', '5d', '20d', '60d')),
     due_date TEXT NOT NULL,
     baseline_price REAL NOT NULL,
     realized_price REAL,
@@ -139,6 +141,17 @@ CREATE TABLE IF NOT EXISTS analysis_source_cache (
     PRIMARY KEY(stock_code, source)
 );
 CREATE INDEX IF NOT EXISTS ix_analysis_source_cache_time ON analysis_source_cache(fetched_at DESC);
+CREATE TABLE IF NOT EXISTS industry_daily_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    rule_version TEXT NOT NULL,
+    data_status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    UNIQUE(snapshot_date, source, rule_version)
+);
+CREATE INDEX IF NOT EXISTS ix_industry_snapshot_date ON industry_daily_snapshots(snapshot_date DESC);
 CREATE TABLE IF NOT EXISTS data_source_health (
     source TEXT PRIMARY KEY,
     category TEXT NOT NULL,
@@ -174,6 +187,14 @@ class CandidateRepository:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(candidate_items)")}
             if "rule_fingerprint" not in columns:
                 connection.execute("ALTER TABLE candidate_items ADD COLUMN rule_fingerprint TEXT NOT NULL DEFAULT 'legacy-unknown'")
+            candidate_migrations = {
+                "signal_context_json": "TEXT NOT NULL DEFAULT '{}'",
+                "signal_fingerprint": "TEXT",
+            }
+            for name, definition in candidate_migrations.items():
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE candidate_items ADD COLUMN {name} {definition}")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_candidate_signal_fingerprint ON candidate_items(signal_fingerprint) WHERE signal_fingerprint IS NOT NULL")
             scan_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scan_runs)")}
             migrations = {
                 "scope": "TEXT NOT NULL DEFAULT 'reference_pool'",
@@ -190,6 +211,36 @@ class CandidateRepository:
             for name, definition in migrations.items():
                 if name not in scan_columns:
                     connection.execute(f"ALTER TABLE scan_runs ADD COLUMN {name} {definition}")
+            performance_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'candidate_performance'").fetchone()[0] or ""
+            if "'60d'" not in performance_sql:
+                connection.execute("DROP INDEX IF EXISTS ix_performance_due")
+                connection.execute("ALTER TABLE candidate_performance RENAME TO candidate_performance_legacy")
+                connection.execute("""CREATE TABLE candidate_performance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    candidate_id INTEGER NOT NULL REFERENCES candidate_items(id) ON DELETE CASCADE,
+                    horizon TEXT NOT NULL CHECK (horizon IN ('1d', '5d', '20d', '60d')),
+                    due_date TEXT NOT NULL,
+                    baseline_price REAL NOT NULL,
+                    realized_price REAL,
+                    realized_trade_date TEXT,
+                    return_pct REAL,
+                    benchmark_code TEXT,
+                    benchmark_baseline_price REAL,
+                    benchmark_realized_price REAL,
+                    benchmark_return_pct REAL,
+                    relative_return_pct REAL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'verified', 'unavailable')),
+                    measured_at TEXT,
+                    source TEXT,
+                    note TEXT,
+                    UNIQUE(candidate_id, horizon)
+                )""")
+                legacy_columns = {row["name"] for row in connection.execute("PRAGMA table_info(candidate_performance_legacy)")}
+                copy_columns = [name for name in ("id", "candidate_id", "horizon", "due_date", "baseline_price", "realized_price", "realized_trade_date", "return_pct", "benchmark_code", "benchmark_baseline_price", "benchmark_realized_price", "benchmark_return_pct", "relative_return_pct", "status", "measured_at", "source", "note") if name in legacy_columns]
+                columns_sql = ", ".join(copy_columns)
+                connection.execute(f"INSERT INTO candidate_performance ({columns_sql}) SELECT {columns_sql} FROM candidate_performance_legacy")
+                connection.execute("DROP TABLE candidate_performance_legacy")
+                connection.execute("CREATE INDEX IF NOT EXISTS ix_performance_due ON candidate_performance(status, due_date)")
             performance_columns = {row["name"] for row in connection.execute("PRAGMA table_info(candidate_performance)")}
             performance_migrations = {
                 "realized_trade_date": "TEXT",
@@ -244,12 +295,62 @@ class CandidateRepository:
                 ),
             )
             candidate_id = int(cursor.lastrowid)
-            for horizon, offset in (("1d", 1), ("5d", 5), ("20d", 20)):
+            for horizon, offset in (("1d", 1), ("5d", 5), ("20d", 20), ("60d", 60)):
                 connection.execute(
                     """INSERT INTO candidate_performance
                     (candidate_id, horizon, due_date, baseline_price, status)
                     VALUES (?, ?, ?, ?, 'pending')""",
                     (candidate_id, horizon, self._business_day(selected_dt.date(), offset).isoformat(), request.score_input.price),
+                )
+        return self.get(candidate_id)
+
+    def create_analysis_signal(self, report: AnalysisReport, planned_horizon: str = "20d", note: str | None = None) -> CandidateItem:
+        if report.quote.get("price") is None or report.quote.get("price") <= 0:
+            raise ValueError("当前分析没有可用的入选价格")
+        trade_date = report.trade_date or self._analysis_trade_date(report)
+        selected_dt = report.created_at
+        fingerprint = self._analysis_signal_fingerprint(report, trade_date)
+        action = report.advice.action
+        reasons = list(dict.fromkeys(report.advice.triggered_conditions + report.advice.unmet_conditions))
+        dimensions = [{"name": factor.key, "label": factor.label, "score": round(factor.score), "reasons": [factor.reason]} for factor in report.factors]
+        grade = "S" if report.zhixing_index >= 80 else "A" if report.zhixing_index >= 65 else "B" if report.zhixing_index >= 50 else "C"
+        context = {
+            "signal_action": action,
+            "trade_date": trade_date,
+            "price": report.quote["price"],
+            "triggered_conditions": report.advice.triggered_conditions,
+            "invalidation_conditions": report.advice.invalidation_conditions,
+            "data_completeness": report.data_completeness,
+            "planned_horizon": planned_horizon,
+            "algorithm_version": report.algorithm_version,
+            "rule_fingerprint": report.rule_fingerprint,
+            "asset_type": report.asset_type,
+        }
+        with self._connect() as connection:
+            existing = connection.execute("SELECT id FROM candidate_items WHERE signal_fingerprint = ?", (fingerprint,)).fetchone()
+            if existing is not None:
+                return self.get(existing["id"])
+            cursor = connection.execute(
+                """INSERT INTO candidate_items (
+                    stock_code, stock_name, selected_at, source_type, source_name,
+                    strategy_id, strategy_version, rule_fingerprint, total_score, grade, reasons_json,
+                    dimensions_json, score_input_json, selected_price, status, note,
+                    price_zones_json, signal_context_json, signal_fingerprint
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    report.stock_code, report.stock_name, selected_dt.isoformat(), "analysis-signal", "个股研究",
+                    "analysis-signal", report.algorithm_version, report.rule_fingerprint, round(report.zhixing_index), grade,
+                    json.dumps(reasons, ensure_ascii=False), json.dumps(dimensions, ensure_ascii=False), "null", report.quote["price"],
+                    "new", note, PriceZones().model_dump_json(), json.dumps(context, ensure_ascii=False), fingerprint,
+                ),
+            )
+            candidate_id = int(cursor.lastrowid)
+            for horizon, offset in (("1d", 1), ("5d", 5), ("20d", 20), ("60d", 60)):
+                connection.execute(
+                    """INSERT INTO candidate_performance
+                    (candidate_id, horizon, due_date, baseline_price, status)
+                    VALUES (?, ?, ?, ?, 'pending')""",
+                    (candidate_id, horizon, self._business_day(selected_dt.date(), offset).isoformat(), report.quote["price"]),
                 )
         return self.get(candidate_id)
 
@@ -452,6 +553,25 @@ class CandidateRepository:
             )
         return health
 
+    def save_industry_snapshot(self, snapshot: IndustryRadarResponse) -> int:
+        snapshot_date = snapshot.snapshot_at.date().isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO industry_daily_snapshots
+                (snapshot_date, snapshot_at, source, rule_version, data_status, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapshot_date, source, rule_version) DO UPDATE SET
+                  snapshot_at=excluded.snapshot_at, data_status=excluded.data_status,
+                  payload_json=excluded.payload_json""",
+                (snapshot_date, snapshot.snapshot_at.isoformat(), snapshot.source, snapshot.rule_version,
+                 snapshot.data_status, snapshot.model_dump_json()),
+            )
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM industry_daily_snapshots WHERE source = ? AND rule_version = ?",
+                (snapshot.source, snapshot.rule_version),
+            ).fetchone()
+        return int(row["count"])
+
     def list_source_health(self) -> list[DataSourceHealth]:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM data_source_health ORDER BY category, source").fetchall()
@@ -547,7 +667,7 @@ class CandidateRepository:
                     SUM(CASE WHEN status = 'verified' AND return_pct > 0 THEN 1 ELSE 0 END) AS wins,
                     AVG(CASE WHEN status = 'verified' THEN return_pct END) AS average_return
                 FROM candidate_performance GROUP BY horizon
-                ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 ELSE 20 END"""
+                ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 WHEN '20d' THEN 20 ELSE 60 END"""
             ).fetchall()
             return_rows = connection.execute(
                 "SELECT horizon, return_pct, relative_return_pct FROM candidate_performance WHERE status = 'verified'"
@@ -576,7 +696,7 @@ class CandidateRepository:
     def list_performance(self, candidate_id: int) -> list[PerformanceOutcome]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM candidate_performance WHERE candidate_id = ? ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 ELSE 20 END",
+                "SELECT * FROM candidate_performance WHERE candidate_id = ? ORDER BY CASE horizon WHEN '1d' THEN 1 WHEN '5d' THEN 5 WHEN '20d' THEN 20 ELSE 60 END",
                 (candidate_id,),
             ).fetchall()
         return [PerformanceOutcome(
@@ -721,6 +841,22 @@ class CandidateRepository:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _analysis_signal_fingerprint(cls, report: AnalysisReport, trade_date: str | None) -> str:
+        payload = {
+            "stock_code": report.stock_code,
+            "trade_date": trade_date,
+            "algorithm_version": report.algorithm_version,
+            "rule_fingerprint": report.rule_fingerprint,
+            "price": round(float(report.quote["price"]), 4) if report.quote.get("price") else None,
+            "action": report.advice.action,
+            "category": report.advice.category,
+            "score_bucket": round(report.zhixing_index / 5) * 5,
+            "invalidation": sorted(report.advice.invalidation_conditions),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     def add_watchlist(self, request: WatchlistCreate, source: str = "user-search") -> WatchlistItem:
         added_at = datetime.now(timezone.utc)
         code = request.code.strip().lower()
@@ -769,6 +905,7 @@ class CandidateRepository:
             reasons=json.loads(row["reasons_json"]), dimensions=json.loads(row["dimensions_json"]),
             score_input=json.loads(row["score_input_json"]), selected_price=row["selected_price"],
             status=row["status"], note=row["note"], price_zones=PriceZones.model_validate_json(row["price_zones_json"]),
+            signal_context=json.loads(row["signal_context_json"] or "{}"),
             performance=self.list_performance(row["id"]),
         )
 

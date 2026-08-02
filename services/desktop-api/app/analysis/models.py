@@ -32,6 +32,8 @@ class TechnicalIndicators(BaseModel):
     macd: MacdIndicator | None = None
     support20: float | None = None
     resistance20: float | None = None
+    prior_support20: float | None = None
+    prior_resistance20: float | None = None
     high52w: float | None = None
     low52w: float | None = None
     volume_ratio: float | None = None
@@ -110,6 +112,7 @@ class Advice(BaseModel):
     unmet_conditions: list[str] = Field(default_factory=list)
     invalidation_conditions: list[str] = Field(default_factory=list)
     data_confidence: float = Field(default=0, ge=0, le=100)
+    data_completeness: float = Field(default=0, ge=0, le=100)
     review_after: str = "下一个交易日收盘后"
 
 
@@ -152,6 +155,7 @@ class AnalysisReport(BaseModel):
     zhixing_raw_score: float = Field(default=0, ge=0, le=100)
     raw_score: float = Field(default=0, ge=0, le=100)
     zhixing_confidence: float = Field(default=0, ge=0, le=100)
+    data_completeness: float = Field(default=0, ge=0, le=100)
     confidence: float = Field(default=0, ge=0, le=100)
     factor_coverage: str = "0/0"
     algorithm_version: str = "1.1.0"
@@ -187,3 +191,9 @@ class AnalysisSnapshotResponse(BaseModel):
     report: AnalysisReport
     saved: bool
     message: str
+
+
+class AnalysisSignalCandidateRequest(BaseModel):
+    report: AnalysisReport
+    planned_horizon: Literal["1d", "5d", "20d", "60d"] = "20d"
+    note: str | None = Field(default=None, max_length=2000)

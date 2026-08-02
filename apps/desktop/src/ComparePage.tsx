@@ -60,7 +60,7 @@ function CompareTable({reports}: {reports: AnalysisReport[]}) {
     {label: '主力流入比', value: report => pct(report.fund_flow.main_flow_ratio == null ? undefined : report.fund_flow.main_flow_ratio * 100), tone: report => (report.fund_flow.main_flow_ratio ?? 0) >= 0 ? 'positive' : 'negative'},
     {label: '行业位置', value: report => report.industry.rank != null ? `${report.industry.rank} / ${report.industry.total ?? '—'}` : '—'},
     {label: '知行指数', value: report => `${number(report.zhixing_index, 0)} · ${report.zhixing_level}`},
-    {label: '覆盖 / 可信度', value: report => `${report.factor_coverage} · ${number(report.zhixing_confidence, 0)}%`},
+    {label: '覆盖 / 数据完整度', value: report => `${report.factor_coverage} · ${number(report.data_completeness, 0)}%`},
   ]
   return <div className="compare-table"><div className="compare-table-row compare-table-header"><span>指标</span>{reports.map(report => <span key={report.stock_code}>{report.stock_name}<small>{report.stock_code}</small></span>)}</div>{rows.map(row => <div className="compare-table-row" key={row.label}><span>{row.label}</span>{reports.map(report => <strong className={row.tone?.(report) ?? ''} key={report.stock_code}>{row.value(report)}</strong>)}</div>)}</div>
 }

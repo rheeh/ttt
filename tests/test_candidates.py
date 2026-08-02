@@ -3,7 +3,7 @@ from pathlib import Path
 from app.database import CandidateRepository
 from datetime import datetime, timedelta, timezone
 
-from app.models import CandidateCreate, CandidateUpdate, DataSourceHealth, QuoteSnapshot, ScoreInput
+from app.models import CandidateCreate, CandidateUpdate, DataSourceHealth, IndustryRadarResponse, QuoteSnapshot, ScoreInput
 from app.scoring import StrategyEngine
 
 
@@ -29,6 +29,7 @@ def test_candidate_survives_repository_restart(tmp_path):
     assert stored.stock_code == "sh600519"
     assert stored.note == "等待确认"
     assert stored.dimensions
+    assert [item.horizon for item in stored.performance] == ["1d", "5d", "20d", "60d"]
 
 
 def test_candidate_status_can_be_updated(tmp_path):
@@ -81,3 +82,13 @@ def test_source_health_is_persisted(tmp_path):
     ))
     stored = repo.list_source_health()
     assert stored[0].source == "fixture" and stored[0].response_ms == 12
+
+
+def test_industry_snapshots_are_upserted_by_trade_day(tmp_path):
+    repo = CandidateRepository(tmp_path / "research.sqlite3")
+    snapshot = IndustryRadarResponse(
+        snapshot_at=datetime(2026, 8, 2, 8, tzinfo=timezone.utc), source="fixture",
+        data_status="degraded", coverage_count=0, coverage_total=1,
+    )
+    assert repo.save_industry_snapshot(snapshot) == 1
+    assert repo.save_industry_snapshot(snapshot.model_copy(update={"snapshot_at": datetime(2026, 8, 2, 9, tzinfo=timezone.utc)})) == 1

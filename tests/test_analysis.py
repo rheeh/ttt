@@ -56,6 +56,38 @@ def test_advice_uses_zhixing_score_and_requires_conditions():
     assert strong.data_confidence == 85
 
 
+def test_advice_zones_match_action_and_never_generate_high_position_zone():
+    technical = calculate_indicators(bars())
+    observation = build_advice(price=18, pe=20, roe=10, score=40, confidence=85, technical=technical,
+                               is_holding=False, position_cost=None, core_complete=True)
+    assert observation.action == "观望"
+    assert not any("加仓" in zone.name or "梭哈" in zone.name for zone in observation.zones)
+    assert "高仓位条件尚未通过历史验证，暂不生成" in observation.unmet_conditions
+
+    holding = build_advice(price=18, pe=20, roe=10, score=70, confidence=85, technical=technical,
+                           is_holding=True, position_cost=16, core_complete=True)
+    assert holding.action == "持有"
+    assert not any("加仓" in zone.name or "梭哈" in zone.name for zone in holding.zones)
+
+
+def test_advice_does_not_upgrade_daily_strength_when_weekly_is_weak():
+    technical = calculate_indicators(bars())
+    weekly = technical.model_copy(update={"trend": "快速下跌"})
+    result = build_advice(price=18, pe=20, roe=10, score=80, confidence=100, technical=technical,
+                          weekly=weekly, is_holding=False, position_cost=None, core_complete=True)
+    assert result.action not in {"建仓", "持有"}
+
+
+def test_advice_uses_prior_range_for_high_position_entry_gate():
+    technical = calculate_indicators(bars())
+    assert technical.prior_support20 is not None and technical.prior_resistance20 is not None
+    price = technical.prior_support20 + (technical.prior_resistance20 - technical.prior_support20) * .9
+    result = build_advice(price=price, pe=20, roe=10, score=80, confidence=100, technical=technical,
+                          is_holding=False, position_cost=None, core_complete=True)
+    assert result.action == "观望"
+    assert not any("建仓" in zone.name for zone in result.zones)
+
+
 def test_eastmoney_fund_flow_and_finance_parsers(monkeypatch):
     payloads = [
         {"data": {"klines": [
@@ -216,6 +248,7 @@ def test_analysis_api_returns_without_saving_and_explicit_snapshot_is_deduplicat
         assert payload["news"]["items"][0]["sentiment"] == "bull"
         assert payload["weekly"]["bar_count"] > 0
         assert payload["diagnosis"]["summary"]
+        assert "高仓位条件尚未通过历史验证，暂不生成" in payload["advice"]["unmet_conditions"]
         assert client.get("/api/analysis?limit=5").json() == []
         saved = client.post("/api/analysis/snapshots", json={"report": payload})
         assert saved.status_code == 200 and saved.json()["saved"] is True
@@ -233,6 +266,13 @@ def test_analysis_api_returns_without_saving_and_explicit_snapshot_is_deduplicat
         with client.app.state.candidates._connect() as connection:
             fact_types = {row[0] for row in connection.execute("SELECT fact_type FROM analysis_facts WHERE report_id = ?", (saved_payload["report_id"],))}
         assert {"fund_flow", "finance", "industry", "news"}.issubset(fact_types)
+        candidate = client.post("/api/candidates/from-analysis", json={"report": payload, "planned_horizon": "20d"})
+        assert candidate.status_code == 201
+        assert candidate.json()["source_type"] == "analysis-signal"
+        assert candidate.json()["score_input"] is None
+        assert [item["horizon"] for item in candidate.json()["performance"]] == ["1d", "5d", "20d", "60d"]
+        duplicate_candidate = client.post("/api/candidates/from-analysis", json={"report": payload, "planned_horizon": "20d"})
+        assert duplicate_candidate.status_code == 201 and duplicate_candidate.json()["id"] == candidate.json()["id"]
 
 
 def test_compare_api_analyzes_two_stocks_in_parallel(tmp_path, monkeypatch):

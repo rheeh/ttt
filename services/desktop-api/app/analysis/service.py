@@ -110,11 +110,13 @@ class IndividualAnalysisService:
         confidence_denominator = total_factors + .2
         confidence_numerator = factor_weight + (.2 if news.status == "ok" else .14 if news.status == "stale" else .04 if news.status == "degraded" else 0)
         zhixing_confidence = round(confidence_numerator / confidence_denominator * 100, 2) if confidence_denominator else 0
+        data_completeness = zhixing_confidence
         zhixing_level = "强势" if zhixing_index >= 80 else "偏强" if zhixing_index >= 60 else "中性" if zhixing_index >= 40 else "偏弱"
         advice = build_advice(
             price=quote.price, pe=quote.pe, roe=finance.roe, score=zhixing_index,
             confidence=zhixing_confidence, technical=technical, is_holding=request.is_holding,
             position_cost=request.position_cost, core_complete=not core_missing and bool(bars), asset_type=preset.asset_type,
+            weekly=weekly,
         )
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
@@ -151,6 +153,7 @@ class IndividualAnalysisService:
             missing_fields=deduped_missing, quote=quote.model_dump(mode="json"), technical=technical,
             weekly=weekly, rocket=rocket, zhixing_index=zhixing_index, zhixing_level=zhixing_level,
             zhixing_raw_score=zhixing_raw_score, raw_score=zhixing_raw_score, zhixing_confidence=zhixing_confidence, confidence=zhixing_confidence,
+            data_completeness=data_completeness,
             factor_coverage=f"{available_count}/{total_factors}", algorithm_version=ZHIXING_ALGORITHM_VERSION,
             rule_fingerprint=ZHIXING_RULE_FINGERPRINT,
             factors=factors, radar=radar, trend_series=trend_series(bars), diagnosis=diagnosis, advice=advice,

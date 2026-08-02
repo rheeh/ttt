@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import CandidateRepository
-from app.analysis.models import AnalysisReport, AnalysisRequest, AnalysisSnapshotRequest, AnalysisSnapshotResponse, CompareRequest, CompareResponse
+from app.analysis.models import AnalysisReport, AnalysisRequest, AnalysisSignalCandidateRequest, AnalysisSnapshotRequest, AnalysisSnapshotResponse, CompareRequest, CompareResponse
 from app.analysis.service import IndividualAnalysisService
 from app.market.scanner import MarketScanner, StockPool
 from app.market.akshare import FallbackHistoryProvider, FallbackQuoteProvider
@@ -110,7 +110,9 @@ def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> Ca
 
 @app.get("/api/market/industry-radar", response_model=IndustryRadarResponse)
 def industry_radar(request: Request) -> IndustryRadarResponse:
-    return request.app.state.industry_radar.fetch()
+    snapshot = request.app.state.industry_radar.fetch()
+    history_count = candidates(request).save_industry_snapshot(snapshot)
+    return snapshot.model_copy(update={"history_snapshot_count": history_count})
 
 
 @app.get("/api/market/review", response_model=MarketReviewResponse, include_in_schema=False)
@@ -270,6 +272,14 @@ def list_candidates(
 ) -> CandidateList:
     rows = candidates(request).list(status=status, limit=limit)
     return CandidateList(candidates=rows, total=len(rows))
+
+
+@app.post("/api/candidates/from-analysis", response_model=CandidateItem, status_code=201)
+def create_analysis_candidate(payload: AnalysisSignalCandidateRequest, request: Request) -> CandidateItem:
+    try:
+        return candidates(request).create_analysis_signal(payload.report, payload.planned_horizon, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.patch("/api/candidates/{candidate_id}", response_model=CandidateItem)

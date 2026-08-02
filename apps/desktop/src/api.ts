@@ -17,6 +17,10 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({score_input: input, source_type: 'manual', source_name: '手动试算'}),
   }).then(parse<Candidate>),
+  addAnalysisSignal: (report: AnalysisReport, plannedHorizon: '1d'|'5d'|'20d'|'60d' = '20d', note?: string) => fetch('/api/candidates/from-analysis', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({report, planned_horizon: plannedHorizon, note}),
+  }).then(parse<Candidate>),
   scanPool: () => fetch('/api/market/scan', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({include_etfs: false}),
   }).then(parse<MarketScan>),

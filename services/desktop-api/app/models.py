@@ -114,11 +114,12 @@ class CandidateItem(BaseModel):
     grade: Literal["S", "A", "B", "C"]
     reasons: list[str]
     dimensions: list[ScoreDimension]
-    score_input: ScoreInput
+    score_input: ScoreInput | None = None
     selected_price: float
     status: CandidateStatus
     note: str | None
     price_zones: PriceZones
+    signal_context: dict = Field(default_factory=dict)
     performance: list["PerformanceOutcome"] = Field(default_factory=list)
 
 
@@ -351,6 +352,12 @@ class AllAMarketSnapshot(BaseModel):
 IndustryStage = Literal["下跌中", "低位企稳", "底部改善", "突破确认", "高位拥挤", "数据不足"]
 
 
+class IndustryConstituent(BaseModel):
+    code: str
+    name: str
+    change_pct: float | None = None
+
+
 class IndustryRadarItem(BaseModel):
     name: str
     stage: IndustryStage
@@ -367,7 +374,9 @@ class IndustryRadarItem(BaseModel):
     up_count: int | None = None
     down_count: int | None = None
     constituent_count: int | None = None
+    constituent_observed: int | None = None
     coverage_pct: float | None = None
+    constituents: list[IndustryConstituent] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     status: Literal["ok", "degraded", "error"] = "degraded"
@@ -383,6 +392,10 @@ class IndustryRadarResponse(BaseModel):
     coverage_count: int
     coverage_total: int
     coverage_pct: float | None = None
+    detail_board_count: int = 0
+    detail_constituent_observed: int = 0
+    detail_constituent_total: int = 0
+    history_snapshot_count: int = 0
     confirmation_days: int = 1
     rule_version: str = "industry-radar-v1"
     building: list[IndustryRadarItem] = Field(default_factory=list)
@@ -427,7 +440,7 @@ class CandidateBatchResponse(BaseModel):
 
 class PerformanceOutcome(BaseModel):
     candidate_id: int
-    horizon: Literal["1d", "5d", "20d"]
+    horizon: Literal["1d", "5d", "20d", "60d"]
     due_date: date
     baseline_price: float
     realized_price: float | None = None
@@ -445,7 +458,7 @@ class PerformanceOutcome(BaseModel):
 
 
 class PerformanceHorizonSummary(BaseModel):
-    horizon: Literal["1d", "5d", "20d"]
+    horizon: Literal["1d", "5d", "20d", "60d"]
     samples: int
     verified: int
     wins: int
@@ -464,6 +477,8 @@ class PerformanceVerificationResponse(BaseModel):
     unavailable: int
     outcomes: list[PerformanceOutcome]
     horizon_summary: list[PerformanceHorizonSummary] = Field(default_factory=list)
+
+
 
 
 CandidateItem.model_rebuild()

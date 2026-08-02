@@ -16,7 +16,8 @@ export type ScoreResult = {
 export type Candidate = ScoreResult & {
   id: number; selected_at: string; selected_price: number; status: string;
   source_name: string; reasons: string[]; note?: string;
-  performance?: {candidate_id: number; horizon: '1d'|'5d'|'20d'; status: 'pending'|'verified'|'unavailable'; due_date: string; baseline_price: number; realized_price?: number; realized_trade_date?: string; return_pct?: number; benchmark_code?: string; benchmark_return_pct?: number; relative_return_pct?: number; measured_at?: string; source?: string; note?: string}[];
+  signal_context?: {signal_action?: string; trade_date?: string; price?: number; triggered_conditions?: string[]; invalidation_conditions?: string[]; data_completeness?: number; planned_horizon?: '1d'|'5d'|'20d'|'60d'; algorithm_version?: string; rule_fingerprint?: string; asset_type?: 'stock'|'etf'};
+  performance?: {candidate_id: number; horizon: '1d'|'5d'|'20d'|'60d'; status: 'pending'|'verified'|'unavailable'; due_date: string; baseline_price: number; realized_price?: number; realized_trade_date?: string; return_pct?: number; benchmark_code?: string; benchmark_return_pct?: number; relative_return_pct?: number; measured_at?: string; source?: string; note?: string}[];
 }
 
 export type QuoteSnapshot = {
@@ -38,7 +39,7 @@ export type MarketReview = {run_id?: number; as_of?: string; source: string; tot
 export type MarketReviewRun = {run_id: number; completed_at: string; source: string; total: number; scoreable: number; average_change_pct?: number; scope: 'reference_pool'|'all_a_market'; pool_name: string; pool_version: string; pool_component_count: number; transaction_date?: string; coverage_pct?: number; data_status: 'ok'|'degraded'|'error'}
 export type DataSourceHealth = {source: string; category: string; installed: boolean; accessible: boolean; valid: boolean; status: 'ok'|'degraded'|'error'|'unavailable'; checked_at: string; response_ms?: number; last_success_at?: string; error?: string; details?: string}
 export type DataSourceHealthResponse = {checked_at?: string; sources: DataSourceHealth[]}
-export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number; median_return_pct?: number; benchmark_code?: string; average_relative_return_pct?: number}[]}
+export type PerformanceVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: Candidate['performance']; horizon_summary: {horizon: '1d'|'5d'|'20d'|'60d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number; median_return_pct?: number; benchmark_code?: string; average_relative_return_pct?: number}[]}
 
 export type AnalysisReport = {
   report_id?: number; trade_date?: string; snapshot_reason?: 'legacy_run'|'manual'|'meaningful_change'|'daily_close'; snapshot_note?: string; content_fingerprint?: string; created_at: string; stock_code: string; stock_name: string; sector: string; asset_type: 'stock'|'etf';
@@ -47,10 +48,10 @@ export type AnalysisReport = {
   enrichment_status: 'ok'|'degraded'|'stale'|'error'|'not_applicable'; enrichment_missing_fields: string[]; enrichment_stale_fields: string[];
   legacy_score_status: 'ok'|'degraded'|'error'; legacy_missing_fields: string[];
   quote: {price?: number; change_pct?: number; pe?: number; pb?: number; turnover_pct?: number; amplitude_pct?: number; trade_at?: string; fetched_at?: string; source?: string; status?: string};
-  technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; volume_ratio_basis?: 'completed_day'|'intraday_unavailable'; trend: string; bar_count: number; atr14?: number; bollinger_width?: number; return_20d_pct?: number; return_60d_pct?: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
+  technical: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; support20?: number; resistance20?: number; prior_support20?: number; prior_resistance20?: number; high52w?: number; low52w?: number; volume_ratio?: number; volume_ratio_basis?: 'completed_day'|'intraday_unavailable'; trend: string; bar_count: number; atr14?: number; bollinger_width?: number; return_20d_pct?: number; return_60d_pct?: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   weekly: {ma5?: number; ma10?: number; ma20?: number; ma60?: number; rsi14?: number; trend: string; bar_count: number; macd?: {dif: number; dea: number; hist: number; golden_cross: boolean; death_cross: boolean}};
   rocket: {score: number; level: string; missing_fields: string[]; dimensions: {key: string; label: string; score: number; reasons: string[]; available: boolean}[]};
-  zhixing_index: number; zhixing_level: string; zhixing_raw_score: number; raw_score: number; zhixing_confidence: number; confidence: number; factor_coverage: string; algorithm_version: string; rule_fingerprint: string;
+  zhixing_index: number; zhixing_level: string; zhixing_raw_score: number; raw_score: number; zhixing_confidence: number; data_completeness: number; confidence: number; factor_coverage: string; algorithm_version: string; rule_fingerprint: string;
   factors: {key: string; label: string; score: number; reason: string; available: boolean; source: string}[];
   radar: {key: string; label: string; score: number; factor_keys: string[]}[];
   trend_series: {trade_date: string; close: number; ma20?: number}[];
@@ -62,7 +63,7 @@ export type AnalysisReport = {
   industry: {name?: string; rank?: number; total?: number; change_pct?: number; main_inflow?: number; constituent_count?: number; up_count?: number; down_count?: number; average_amount?: number; leader_name?: string; leader_change_pct?: number; source: string; endpoint?: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
   news: {items: {title: string; snippet: string; source_name: string; published_at: string; url: string; sentiment: 'bull'|'bear'|'neutral'}[]; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
   freshness: Record<string, {key?: string; state: 'fresh'|'warning'|'stale'|'expired'|'error'|'unknown'; fetched_at?: string; trade_at?: string; trade_date?: string; report_date?: string; latest_trade_date?: string; expected_trade_date?: string; bar_count?: number; note?: string; age_seconds?: number; warning_threshold_seconds?: number; cache_used?: boolean; cache_expired?: boolean}>;
-  advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; triggered_conditions: string[]; unmet_conditions: string[]; invalidation_conditions: string[]; data_confidence: number; review_after: string; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
+  advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; triggered_conditions: string[]; unmet_conditions: string[]; invalidation_conditions: string[]; data_confidence: number; data_completeness: number; review_after: string; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
 }
 
 export type CompareResponse = {reports: AnalysisReport[]; errors: Record<string, string>}
@@ -76,12 +77,13 @@ export type IndustryRadarItem = {
   low_position_score?: number; deceleration_score?: number; breadth_score?: number;
   volume_price_score?: number; relative_strength_score?: number; change_pct?: number;
   return_5d_pct?: number; return_20d_pct?: number; drawdown_1y_pct?: number;
-  up_count?: number; down_count?: number; constituent_count?: number; coverage_pct?: number;
+  up_count?: number; down_count?: number; constituent_count?: number; constituent_observed?: number; coverage_pct?: number;
+  constituents?: {code: string; name: string; change_pct?: number}[];
   evidence: string[]; risks: string[]; status: 'ok'|'degraded'|'error'; source: string; fetched_at: string;
 }
 export type IndustryRadar = {
   scope: 'all_industries'; snapshot_at: string; source: string; data_status: 'ok'|'degraded'|'error';
-  coverage_count: number; coverage_total: number; coverage_pct?: number; confirmation_days: number;
+  coverage_count: number; coverage_total: number; coverage_pct?: number; detail_board_count: number; detail_constituent_observed: number; detail_constituent_total: number; history_snapshot_count: number; confirmation_days: number;
   rule_version: string; building: IndustryRadarItem[]; confirmed: IndustryRadarItem[];
   overheated: IndustryRadarItem[]; other: IndustryRadarItem[]; degraded_reasons: string[];
 }

@@ -52,7 +52,7 @@ function App() {
       <div className="nav-foot"><Database />仅本机存储 <span className="status-dot" /></div>
     </aside>
     <main>
-      {view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar()} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
+      {view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar()} onOpenStock={openStock} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
     </main>
   </div>
 }

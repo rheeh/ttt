@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from app.models import IndustryRadarItem, IndustryRadarResponse
+from app.models import IndustryConstituent, IndustryRadarItem, IndustryRadarResponse
 
 
 RULE_VERSION = "industry-radar-v1-sina"
@@ -53,8 +53,10 @@ class IndustryRadarProvider:
         # detailed breadth sample bounded so one refresh cannot become a
         # dozens-of-requests timeout; the remaining boards retain their
         # current snapshot but are explicitly marked as lacking breadth.
-        detail_rows = rows[:12]
-        items: list[IndustryRadarItem] = [self._current_only_item(row, snapshot_at) for row in rows[12:]]
+        ranked_rows = sorted(rows, key=lambda row: _number(_value(row, "公司家数", "成分股数量")) or 0, reverse=True)
+        detail_rows = ranked_rows[:12]
+        detail_names = {str(_value(row, "板块", "板块名称") or "未知板块") for row in detail_rows}
+        items: list[IndustryRadarItem] = [self._current_only_item(row, snapshot_at) for row in rows if str(_value(row, "板块", "板块名称") or "未知板块") not in detail_names]
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self._build_one, ak, row, snapshot_at): row for row in detail_rows}
             for future in as_completed(futures):
@@ -66,11 +68,16 @@ class IndustryRadarProvider:
                     items.append(self._item(name, snapshot_at, error=self._short_error(exc)))
 
         items.sort(key=lambda item: item.change_pct if item.change_pct is not None else -999, reverse=True)
-        detail_count = sum(item.status == "ok" for item in items)
+        detail_items = [item for item in items if item.name in detail_names]
+        detail_count = sum(item.status == "ok" for item in detail_items)
+        observed = sum(item.constituent_observed or 0 for item in detail_items)
+        expected = sum(item.constituent_count or 0 for item in detail_items)
         return IndustryRadarResponse(
             snapshot_at=snapshot_at, source=self.name,
             data_status="degraded", coverage_count=detail_count,
             coverage_total=len(items), coverage_pct=round(detail_count / len(items) * 100, 2) if items else None,
+            detail_board_count=len(detail_rows), detail_constituent_observed=observed,
+            detail_constituent_total=expected,
             rule_version=RULE_VERSION,
             # No Sina board history is available here, therefore these are
             # deliberately kept separate from confirmed bottoming signals.
@@ -111,7 +118,8 @@ class IndustryRadarProvider:
             return self._item(
                 name, fetched_at, change=change, up_count=up_count or None,
                 down_count=down_count or None, constituent_count=company_count or None,
-                coverage_pct=coverage, status="ok" if observed else "degraded",
+                constituent_observed=observed, coverage_pct=coverage,
+                constituents=self._constituents(detail_rows), status="ok" if observed else "degraded",
                 evidence=evidence,
                 error="新浪行业接口未提供板块历史K线，当前不生成阶段评分",
             )
@@ -126,13 +134,15 @@ class IndustryRadarProvider:
     def _item(name: str, fetched_at: datetime, *, change: float | None = None,
               up_count: int | None = None, down_count: int | None = None,
               constituent_count: int | None = None, coverage_pct: float | None = None,
+              constituent_observed: int | None = None, constituents: list[IndustryConstituent] | None = None,
               status: str = "degraded", evidence: list[str] | None = None,
               error: str | None = None) -> IndustryRadarItem:
         risks = [error] if error else ["缺少板块历史K线，不能判断筑底或突破"]
         return IndustryRadarItem(
             name=name, stage="数据不足", score=None, change_pct=change,
             up_count=up_count, down_count=down_count, constituent_count=constituent_count,
-            coverage_pct=coverage_pct, evidence=evidence or [], risks=risks,
+            constituent_observed=constituent_observed, coverage_pct=coverage_pct,
+            constituents=constituents or [], evidence=evidence or [], risks=risks,
             status=status if status in {"ok", "degraded", "error"} else "degraded",
             source="sina-industry-radar", fetched_at=fetched_at,
         )
@@ -141,3 +151,17 @@ class IndustryRadarProvider:
     def _short_error(error: Exception) -> str:
         text = str(error).replace("\n", " ")
         return text if len(text) <= 220 else text[:217] + "..."
+
+    @staticmethod
+    def _constituents(rows: list[dict[str, Any]]) -> list[IndustryConstituent]:
+        constituents: list[IndustryConstituent] = []
+        for row in rows:
+            code = _value(row, "symbol", "代码", "股票代码", "code")
+            name = _value(row, "name", "名称", "股票名称")
+            if not code or not name:
+                continue
+            constituents.append(IndustryConstituent(
+                code=str(code).strip(), name=str(name).strip(),
+                change_pct=_number(_value(row, "changepercent", "涨跌幅")),
+            ))
+        return constituents

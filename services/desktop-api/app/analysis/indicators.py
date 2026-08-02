@@ -62,6 +62,7 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
     if not closes:
         return TechnicalIndicators()
     recent = bars[-20:]
+    prior_recent = bars[-21:-1] if len(bars) >= 21 else bars[:-1]
     current_volume = bars[-1].volume
     previous_volumes = [bar.volume for bar in bars[-6:-1] if bar.volume > 0]
     local_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
@@ -93,6 +94,8 @@ def calculate_indicators(bars: list[DailyBar]) -> TechnicalIndicators:
         ma5=ma5, ma10=ma10, ma20=ma20, ma60=ma60, rsi14=calculate_rsi(closes),
         macd=calculate_macd(closes), support20=round(min(bar.low for bar in recent), 4) if recent else None,
         resistance20=round(max(bar.high for bar in recent), 4) if recent else None,
+        prior_support20=round(min(bar.low for bar in prior_recent), 4) if prior_recent else None,
+        prior_resistance20=round(max(bar.high for bar in prior_recent), 4) if prior_recent else None,
         high52w=round(max(bar.high for bar in bars[-252:]), 4), low52w=round(min(bar.low for bar in bars[-252:]), 4),
         volume_ratio=volume_ratio, volume_ratio_basis="intraday_unavailable" if intraday else "completed_day",
         trend=trend, bar_count=len(bars), atr14=atr14,

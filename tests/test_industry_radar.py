@@ -20,7 +20,10 @@ class FakeAkshare:
     @staticmethod
     def stock_sector_detail(sector):
         assert sector == "hangye_1"
-        return FakeFrame([{"changepercent": "2.0"}, {"changepercent": "-1.0"}])
+        return FakeFrame([
+            {"symbol": "600001", "name": "示例甲", "changepercent": "2.0"},
+            {"symbol": "600002", "name": "示例乙", "changepercent": "-1.0"},
+        ])
 
 
 def test_radar_uses_sina_industry_snapshot(monkeypatch):
@@ -31,6 +34,8 @@ def test_radar_uses_sina_industry_snapshot(monkeypatch):
     assert result.other[0].name == "示例行业"
     assert result.other[0].stage == "数据不足"
     assert result.other[0].up_count == 1
+    assert result.other[0].constituents[0].code == "600001"
+    assert result.detail_board_count == 1 and result.detail_constituent_observed == 2
     assert "历史K线" in result.degraded_reasons[0]
 
 
