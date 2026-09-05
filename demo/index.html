@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1e3028">
+  <meta name="description" content="体验知行股研的参考池筛选、自选管理、规则评分、个股研究、股票对比与研究快照。使用合成样本，无需安装。">
+  <title>知行股研 · 交互演示</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./data.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到研究内容</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#research"><span class="brand-symbol" aria-hidden="true">知</span><span>知行股研<small>ZHIXING RESEARCH</small></span></a>
+      <div class="sidebar-label">研究工作台</div>
+      <nav aria-label="主要功能">
+        <a href="#research" data-nav="research"><span aria-hidden="true">◫</span>个股研究</a>
+        <a href="#pool" data-nav="pool"><span aria-hidden="true">▦</span>参考池与自选<b id="watch-count">3</b></a>
+        <a href="#compare" data-nav="compare"><span aria-hidden="true">⇄</span>股票对比</a>
+        <a href="#snapshots" data-nav="snapshots"><span aria-hidden="true">◷</span>研究快照</a>
+      </nav>
+      <div class="sidebar-note"><span class="live-dot"></span>交互演示<small>筛选 → 研究 → 保存 → 对比</small><p>使用虚构标的和合成行情，体验完整研究流程。</p></div>
+      <div class="sidebar-bottom"><a href="https://rheeh.github.io/">← 返回主页</a><a href="https://github.com/rheeh/ttt" target="_blank" rel="noopener noreferrer">GitHub 源码 ↗</a></div>
+    </aside>
+    <main>
+      <header class="topbar"><span>工作台 <i>/</i> <b id="breadcrumb">个股研究</b></span><span class="demo-badge"><span class="live-dot"></span>静态演示 · 合成数据</span></header>
+      <div class="demo-notice"><span>样本中的名称、代码、行情与走势均为虚构；评分由项目规则引擎计算。</span><button id="reset-demo" type="button">重置演示</button></div>
+      <div id="content" tabindex="-1"></div>
+      <footer class="workspace-footer"><span>知行股研 / 从信息到可追溯的研究</span><span>DEMO 01 · 无需安装</span></footer>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="noscript">请启用 JavaScript 以体验搜索、评分和研究快照。</p></noscript>
+</body>
+</html>
