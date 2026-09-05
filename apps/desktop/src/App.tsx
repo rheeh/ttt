@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
-import { BookOpen, CircleGauge, Database, FlaskConical, GitCompare, LayoutDashboard } from 'lucide-react'
+import { BookOpen, CandlestickChart, CircleGauge, Database, FlaskConical, GitCompare, LayoutDashboard } from 'lucide-react'
 import { api } from './api'
 import { ComparePage } from './ComparePage'
 import { DeepResearch } from './DeepResearch'
+import { KlineTraining } from './KlineTraining'
 import { IndustryRadarPage, PerformanceReviewPage, SourceHealthPage } from './ReviewPages'
 import type { Candidate, DataSourceHealthResponse, IndustryRadar, PerformanceVerification } from './types'
 
-type View = 'research' | 'compare' | 'radar' | 'performance' | 'sources'
+type View = 'research' | 'compare' | 'radar' | 'performance' | 'sources' | 'training'
 
 function App() {
-  const [view, setView] = useState<View>('research')
+  const [view, setView] = useState<View>(() => window.location.hash === '#training' ? 'training' : 'research')
+  useEffect(() => { window.history.replaceState(null, '', view === 'training' ? '#training' : window.location.pathname) }, [view])
   const [analysisStock, setAnalysisStock] = useState('')
   const [items, setItems] = useState<Candidate[]>([])
   const [radar, setRadar] = useState<IndustryRadar | null>(null)
@@ -38,12 +40,13 @@ function App() {
   }
   function openStock(code: string) { setAnalysisStock(code); setView('research') }
 
-  return <div className="shell">
+  return <div className={`shell${view === 'training' ? ' training-shell' : ''}`}>
     <aside>
       <div className="brand"><span>知行</span><small>STOCK LAB</small></div>
       <nav>
         <button className={view === 'research' ? 'active' : ''} onClick={() => setView('research')}><LayoutDashboard />个股研究</button>
         <button className={view === 'compare' ? 'active' : ''} onClick={() => setView('compare')}><GitCompare />股票对比</button>
+        <button className={view === 'training' ? 'active' : ''} onClick={() => setView('training')}><CandlestickChart />K线训练</button>
         <button className={view === 'radar' ? 'active' : ''} onClick={() => { setView('radar'); void refreshRadar() }}><CircleGauge />板块雷达</button>
         <button className={view === 'performance' ? 'active' : ''} onClick={() => { setView('performance'); void refreshCandidates() }}><FlaskConical />信号核验</button>
         <button className={view === 'sources' ? 'active' : ''} onClick={() => { setView('sources'); void refreshSourceHealth() }}><Database />数据源状态</button>
@@ -52,7 +55,7 @@ function App() {
       <div className="nav-foot"><Database />仅本机存储 <span className="status-dot" /></div>
     </aside>
     <main>
-      {view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar()} onOpenStock={openStock} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
+      {view === 'training' ? <KlineTraining /> : view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar()} onOpenStock={openStock} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
     </main>
   </div>
 }

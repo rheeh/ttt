@@ -16,3 +16,7 @@ coverage/
 *.tsbuildinfo
 apps/desktop/vite.config.js
 apps/desktop/vite.config.d.ts
+
+# Local browser validation artifacts
+.playwright-cli/
+output/playwright/

@@ -25,6 +25,8 @@ from app.models import (
 )
 from app.scoring import StrategyEngine
 from app.settings import Settings, get_settings
+from app.training.router import router as training_router
+from app.training.service import TrainingService
 
 
 @asynccontextmanager
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
     app.state.engine = StrategyEngine(settings.strategy_path)
     app.state.candidates = CandidateRepository(settings.database_path)
     app.state.pool = StockPool(settings.stock_pool_path)
+    app.state.training = TrainingService(settings.database_path, app.state.pool, app.state.candidates.list_watchlist)
     quote_provider = FallbackQuoteProvider(TencentQuoteProvider())
     history_provider = FallbackHistoryProvider(TencentDailyProvider())
     app.state.market_scanner = MarketScanner(
@@ -54,6 +57,7 @@ app = FastAPI(
     description="仅用于本地股票研究；不含交易接口。",
     lifespan=lifespan,
 )
+app.include_router(training_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
