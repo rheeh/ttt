@@ -13,10 +13,11 @@ from app.market.daily_contract import parse_daily_rows, parse_tencent_daily
 class TencentDailyProvider:
     name = "tencent-qfq-day"
 
-    def __init__(self, timeout_seconds: float = 8, max_workers: int = 6, days: int = 30):
+    def __init__(self, timeout_seconds: float = 8, max_workers: int = 6, days: int = 30, bars_provider=None):
         self.timeout_seconds = timeout_seconds
         self.max_workers = max_workers
         self.days = days
+        self.bars_provider = bars_provider
 
     def fetch(self, presets: list[StockPreset]) -> dict[str, DailyIndicators]:
         results: dict[str, DailyIndicators] = {}
@@ -33,6 +34,12 @@ class TencentDailyProvider:
         return results
 
     def _fetch_one(self, code: str) -> DailyIndicators:
+        if self.bars_provider:
+            bars = self.bars_provider(code, self.days)
+            if getattr(bars, "error", None):
+                raise ValueError(bars.error)
+            result = self.parse_rows(code, [[bar.trade_date, bar.open, bar.close, bar.high, bar.low, bar.volume] for bar in bars])
+            return result.model_copy(update={"source": getattr(bars, "source", self.name)})
         query = urlencode({"param": f"{code},day,,,{self.days},qfq"})
         request = Request(
             "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + query,

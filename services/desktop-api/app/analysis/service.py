@@ -40,14 +40,18 @@ class IndividualAnalysisService:
         "eastmoney-finance": 400 * 86400,
     }
 
-    def __init__(self, pool: StockPool, quote_provider: TencentQuoteProvider | None = None, timeout_seconds: float = 8, cache: Any | None = None):
+    def __init__(self, pool: StockPool, quote_provider: TencentQuoteProvider | None = None, timeout_seconds: float = 8, cache: Any | None = None, bars_provider=None, lake=None):
         self.pool = pool
         self.quote_provider = quote_provider or TencentQuoteProvider(timeout_seconds=timeout_seconds)
         self.timeout_seconds = timeout_seconds
         self.by_code = {item.code: item for item in pool.stocks + pool.etfs}
         self.cache = cache
+        self.bars_provider = bars_provider
         self.fund_flow_provider = EastmoneyFundFlowProvider(timeout_seconds)
         self.finance_provider = EastmoneyFinanceProvider(timeout_seconds)
+        if lake:
+            from app.data_lake.history import LakeFinanceProvider
+            self.finance_provider = LakeFinanceProvider(lake, self.finance_provider)
         self.industry_provider = EastmoneyIndustryProvider(timeout_seconds)
         self.news_provider = EastmoneyNewsProvider(timeout_seconds)
 
@@ -299,11 +303,15 @@ class IndividualAnalysisService:
         expected = latest_session(now)
         latest = bars[-1].trade_date if bars else None
         error = getattr(bars, "error", None)
-        state = "error" if not bars else "unknown" if expected is None else "fresh" if latest == expected else "warning"
+        state = "error" if not bars else "warning" if error else "unknown" if expected is None else "fresh" if latest == expected else "warning"
         note = error or ("暂无有效的已完成日线" if not bars else
                         "交易日历超出覆盖范围，无法核对最新交易日" if expected is None else
                         "日线日期与预期不一致，可能停牌、数据滞后或日期异常" if latest != expected else
                         "已核对最近完成的交易日；盘中当日K线不参与收盘指标")
+        if getattr(bars, "source", None) == "cnequity-local":
+            note = "读取本地历史库；" + note
+        elif getattr(bars, "fallback_reason", None):
+            note = "使用腾讯备用日线（" + bars.fallback_reason + "）；" + note
         return {"label": "日线", "state": state, "bar_count": len(bars), "note": note,
                 "latest_trade_date": latest.isoformat() if latest else None,
                 "expected_trade_date": expected.isoformat() if expected else None,
@@ -411,6 +419,8 @@ class IndividualAnalysisService:
             return []
 
     def fetch_bars(self, code: str, days: int = 252) -> list[DailyBar]:
+        if self.bars_provider:
+            return self.bars_provider(code, days)
         query = urlencode({"param": f"{code},day,,,{days},qfq"})
         request = Request(
             "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + query,

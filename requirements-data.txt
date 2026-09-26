@@ -1,0 +1,2 @@
+# Optional persistent market-data backend; keep the adapter contract pinned.
+cnequity==0.11.0

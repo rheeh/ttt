@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { api } from './api'
 import { RequestProgress } from './RequestProgress'
+import { DataLakePanel } from './DataLakePanel'
 import type { Candidate, DataSourceHealthResponse, IndustryDetail, IndustryRadar, IndustryRadarItem, IndustrySignalVerification, MarketReview, MarketReviewRun, PerformanceVerification } from './types'
 
 const radarPct = (value?: number) => value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
@@ -127,6 +128,7 @@ type HealthProps = { health: DataSourceHealthResponse | null; testing: boolean; 
 export function SourceHealthPage({health, testing, onTest, onRefresh}: HealthProps) {
   return <>
     <header><div><p className="eyebrow">DATA SOURCES</p><h1>数据源状态</h1><p>区分已安装、接口可访问和数据有效；失败时保留最近一次成功时间。</p></div><button className="icon-btn" aria-label="刷新记录" onClick={onRefresh}><RefreshCw /></button></header>
+    <DataLakePanel />
     <section className="review-meta"><span>最近检查：{health?.checked_at ? new Date(health.checked_at).toLocaleString('zh-CN') : '尚未检查'}</span><span>本机数据源诊断</span><button className="scan-button" onClick={onTest} disabled={testing}>{testing ? '测试中…' : '测试全部数据源'}</button></section>
     {testing && <RequestProgress label="正在测试数据源连接"/>}
     {!health?.sources.length ? <section className="panel review-empty"><Activity /><h2>尚未进行数据源测试</h2><p>点击“测试全部数据源”检查腾讯、AKShare 和东方财富接口。</p></section> : <section className="source-health-grid">{health.sources.map(item => <article className="panel source-health-card" key={item.source}><div className="panel-title"><h2>{item.source}</h2><span className={`source-badge ${item.status}`}>{item.status === 'ok' ? '可用' : item.status === 'unavailable' ? '未安装' : item.status === 'degraded' ? '部分有效' : '失败'}</span></div><div className="health-flags"><span className={item.installed ? 'yes' : 'no'}>安装 {item.installed ? '是' : '否'}</span><span className={item.accessible ? 'yes' : 'no'}>可访问 {item.accessible ? '是' : '否'}</span><span className={item.valid ? 'yes' : 'no'}>数据有效 {item.valid ? '是' : '否'}</span></div><div className="health-detail"><span>分类：{item.category}</span><span>响应：{item.response_ms == null ? '—' : `${item.response_ms} ms`}</span><span>最近成功：{item.last_success_at ? new Date(item.last_success_at).toLocaleString('zh-CN') : '暂无'}</span></div>{item.error && <p className="source-note">{item.error}</p>}</article>)}</section>}

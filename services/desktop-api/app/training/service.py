@@ -114,7 +114,7 @@ def snapshot(state: dict) -> dict:
             f"共成交 {metrics['trades']} 笔，模拟费用 {metrics['fees']:.2f} 元。" if metrics['trades'] else "本局没有成交。可回看观望记录，检查入场条件是否过于严格。",
             "期末持仓按最后收盘价估值，未强制平仓，未扣假设卖出费用。" if state["shares"] else "期末为空仓。结合买卖标记，复查退出时机与最初的交易理由。",
         ]}
-    return {"id": state["id"], "status": state["status"], "revision": state["revision"], "created_at": state["created_at"], "pool": state["pool"], "total_steps": state["total_steps"], "step": state["cursor"] - WARMUP + 1, "warmup": WARMUP, "initial_cash": INITIAL_CASH, "cash": round(state["cash"], 2), "shares": state["shares"], "sellable_shares": state["shares"], "bars": bars, "actions": state["actions"], "equity_curve": state["equity_curve"], "metrics": metrics, "reveal": report, "rules_version": state.get("rules_version", RULES_VERSION), "data_source": "腾讯前复权日线 · 本地历史缓存" if state["cache_used"] else "腾讯前复权日线", "cache_used": state["cache_used"]}
+    return {"id": state["id"], "status": state["status"], "revision": state["revision"], "created_at": state["created_at"], "pool": state["pool"], "total_steps": state["total_steps"], "step": state["cursor"] - WARMUP + 1, "warmup": WARMUP, "initial_cash": INITIAL_CASH, "cash": round(state["cash"], 2), "shares": state["shares"], "sellable_shares": state["shares"], "bars": bars, "actions": state["actions"], "equity_curve": state["equity_curve"], "metrics": metrics, "reveal": report, "rules_version": state.get("rules_version", RULES_VERSION), "data_source": state.get("data_source") or ("腾讯前复权日线 · 本地历史缓存" if state["cache_used"] else "腾讯前复权日线"), "cache_used": state["cache_used"]}
 
 
 class TrainingService:
@@ -167,23 +167,32 @@ class TrainingService:
         if not stocks:
             raise TrainingError("该题库暂无可用沪深主板股票，请先添加主板自选股")
         random.SystemRandom().shuffle(stocks)
+        preferred = self.provider.preferred_codes() if hasattr(self.provider, "preferred_codes") else set()
+        stocks.sort(key=lambda stock: stock["code"] not in preferred)
         chosen = None
         # Prefer successful local history; train offline after the first successful draw.
         with self.connect() as db:
             cache = {row[0]: row[1:] for row in db.execute("SELECT code, fetched_at, bars FROM kline_history")}
         for stock in stocks[:4]:
+            local = self.provider.fetch_local(stock["code"]) if hasattr(self.provider, "fetch_local") else []
+            if len(local) >= WARMUP + steps:
+                chosen = (stock, local, getattr(local, "fetched_at", datetime.now(timezone.utc).isoformat()), True, "CNEquity 前复权日线 · 本地数据湖")
+                break
             cached = cache.get(stock["code"])
             if cached:
                 bars = valid_bars(json.loads(cached[1]))
                 fetched_at, cache_used = cached[0], True
+                data_source = "腾讯前复权日线 · 本地历史缓存"
             else:
                 try:
-                    bars = valid_bars(self.provider.fetch(stock["code"]))
+                    fetched = self.provider.fetch(stock["code"])
+                    bars = valid_bars(fetched)
+                    data_source = "CNEquity 前复权日线 · 本地数据湖" if getattr(fetched, "source", None) == "cnequity-local" else "腾讯前复权日线"
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
                 fetched_at, cache_used = datetime.now(timezone.utc).isoformat(), False
             if len(bars) >= WARMUP + steps:
-                chosen = (stock, bars, fetched_at, cache_used)
+                chosen = (stock, bars, fetched_at, cache_used, data_source)
                 break
         if chosen is None:
             for stock in stocks:
@@ -191,17 +200,18 @@ class TrainingService:
                 if cached:
                     bars = valid_bars(json.loads(cached[1]))
                     if len(bars) >= WARMUP + steps:
-                        chosen = (stock, bars, cached[0], True)
+                        chosen = (stock, bars, cached[0], True, "腾讯前复权日线 · 本地历史缓存")
                         break
         if chosen is None:
             raise TrainingError("暂时无法取得足够的真实历史行情，且没有可用缓存。请稍后重试或切换题库。", 503)
-        stock, bars, fetched_at, cache_used = chosen
+        stock, bars, fetched_at, cache_used, data_source = chosen
         start = random.SystemRandom().randint(0, len(bars) - WARMUP - steps)
         selected = bars[start:start + WARMUP + steps]
-        state = {"id": str(uuid4()), "rules_version": RULES_VERSION, "status": "active", "revision": 0, "created_at": datetime.now(timezone.utc).isoformat(), "stock": stock, "pool": kind, "bars": selected, "cursor": WARMUP - 1, "total_steps": steps, "cash": INITIAL_CASH, "shares": 0, "fees": 0, "benchmark_cash": INITIAL_CASH, "benchmark_shares": 0, "actions": [], "equity_curve": [{"step": 0, "equity": INITIAL_CASH, "benchmark": INITIAL_CASH}], "fetched_at": fetched_at, "cache_used": cache_used}
+        state = {"id": str(uuid4()), "rules_version": RULES_VERSION, "status": "active", "revision": 0, "created_at": datetime.now(timezone.utc).isoformat(), "stock": stock, "pool": kind, "bars": selected, "cursor": WARMUP - 1, "total_steps": steps, "cash": INITIAL_CASH, "shares": 0, "fees": 0, "benchmark_cash": INITIAL_CASH, "benchmark_shares": 0, "actions": [], "equity_curve": [{"step": 0, "equity": INITIAL_CASH, "benchmark": INITIAL_CASH}], "fetched_at": fetched_at, "cache_used": cache_used, "data_source": data_source}
         try:
             with self.connect() as db:
-                db.execute("INSERT OR REPLACE INTO kline_history VALUES (?, ?, ?)", (stock["code"], fetched_at, json.dumps(bars)))
+                if not data_source.startswith("CNEquity"):
+                    db.execute("INSERT OR REPLACE INTO kline_history VALUES (?, ?, ?)", (stock["code"], fetched_at, json.dumps(bars)))
                 db.execute("INSERT INTO kline_sessions VALUES (?, ?, ?, ?)", (state["id"], state["status"], state["created_at"], json.dumps(state)))
         except sqlite3.IntegrityError as exc:
             raise TrainingError("另一个窗口已开始训练，请刷新后继续", 409) from exc

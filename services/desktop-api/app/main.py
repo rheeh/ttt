@@ -32,6 +32,10 @@ from app.scoring import StrategyEngine
 from app.settings import Settings, get_settings
 from app.training.router import router as training_router
 from app.training.service import TrainingService
+from app.data_lake.reader import LakeReader
+from app.data_lake.history import DailyHistoryRouter, LakeTrainingProvider
+from app.data_lake.jobs import LakeJobs
+from app.data_lake.router import router as lake_router
 
 
 @asynccontextmanager
@@ -41,28 +45,36 @@ async def lifespan(app: FastAPI):
     app.state.engine = StrategyEngine(settings.strategy_path)
     app.state.candidates = CandidateRepository(settings.database_path)
     app.state.pool = StockPool(settings.stock_pool_path)
-    app.state.training = TrainingService(settings.database_path, app.state.pool, app.state.candidates.list_watchlist)
+    app.state.lake = LakeReader(settings.lake_root)
+    app.state.lake_jobs = LakeJobs(settings.lake_root, settings.database_path)
+    app.state.daily_history = DailyHistoryRouter(app.state.lake, cache_path=settings.database_path)
+    app.state.training = TrainingService(settings.database_path, app.state.pool, app.state.candidates.list_watchlist,
+                                        provider=LakeTrainingProvider(app.state.daily_history))
     quote_provider = FallbackQuoteProvider(TencentQuoteProvider())
-    history_provider = FallbackHistoryProvider(TencentDailyProvider())
+    history_provider = FallbackHistoryProvider(TencentDailyProvider(bars_provider=app.state.daily_history.fetch_bars))
     app.state.market_scanner = MarketScanner(
         pool=app.state.pool,
         provider=quote_provider,
         engine=app.state.engine,
         history_provider=history_provider,
     )
-    app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates)
+    app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates,
+                                                          bars_provider=app.state.daily_history.fetch_bars, lake=app.state.lake)
     app.state.all_a_snapshot = AllAMarketSnapshotProvider()
-    app.state.industry_history = TencentConstituentHistoryProvider(days=150, cache_path=settings.database_path)
+    app.state.industry_history = TencentConstituentHistoryProvider(days=150, cache_path=settings.database_path,
+                                                                 bars_provider=app.state.daily_history.fetch_bars)
     app.state.industry_radar = IndustryRadarProvider(history_provider=app.state.industry_history)
     app.state.industry_scheduler = IndustryRadarScheduler(
         lambda: _refresh_industry_snapshot(app.state.candidates, app.state.industry_radar, include_history=True, require_complete=True),
         state_path=settings.database_path,
     )
     app.state.industry_scheduler.start()
+    app.state.lake_jobs.begin_schedule()
     try:
         yield
     finally:
         app.state.industry_scheduler.stop()
+        app.state.lake_jobs.stop()
 
 
 app = FastAPI(
@@ -72,6 +84,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(training_router)
+app.include_router(lake_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],

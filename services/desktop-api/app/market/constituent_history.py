@@ -19,11 +19,12 @@ class TencentConstituentHistoryProvider:
 
     name = "tencent-qfq-constituent-history"
 
-    def __init__(self, days: int = 150, max_workers: int = 6, timeout_seconds: float = 8, cache_path: Path | None = None):
+    def __init__(self, days: int = 150, max_workers: int = 6, timeout_seconds: float = 8, cache_path: Path | None = None, bars_provider=None):
         self.days = days
         self.max_workers = max_workers
         self.timeout_seconds = timeout_seconds
         self.cache = HistoryCache(cache_path) if cache_path else None
+        self.bars_provider = bars_provider
 
     def fetch(self, codes: list[str]) -> dict[str, list[DailyBar]]:
         unique = list(dict.fromkeys(code for code in codes if code))
@@ -31,7 +32,7 @@ class TencentConstituentHistoryProvider:
         expected = latest_session()
         pending = []
         for code in unique:
-            cached = self.cache.get(code, expected, self.days) if self.cache else None
+            cached = self.cache.get(code, expected, self.days) if self.cache and not self.bars_provider else None
             if cached:
                 result[code] = cached
                 result.cache_hits.append(code)
@@ -50,7 +51,7 @@ class TencentConstituentHistoryProvider:
                     continue
                 if bars:
                     result[code] = bars
-                    if self.cache:
+                    if self.cache and not self.bars_provider:
                         self.cache.save(code, bars)
                 else:
                     result.failures[code] = "不足60根有效的已完成日线"
@@ -60,6 +61,11 @@ class TencentConstituentHistoryProvider:
 
     def _fetch_one(self, code: str) -> list[DailyBar]:
         provider_code = self._provider_code(code)
+        if self.bars_provider:
+            bars = self.bars_provider(provider_code, self.days)
+            if getattr(bars, "error", None):
+                raise ValueError(bars.error)
+            return bars if len(bars) >= 60 else []
         query = urlencode({"param": f"{provider_code},day,,,{self.days},qfq"})
         request = Request(
             "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + query,

@@ -21,6 +21,7 @@ class Settings:
     database_path: Path
     strategy_path: Path
     stock_pool_path: Path
+    lake_root: Path
 
 
 def get_settings() -> Settings:
@@ -31,4 +32,5 @@ def get_settings() -> Settings:
         database_path=data_dir / "research.sqlite3",
         strategy_path=repo_root / "packages" / "strategy-spec" / "group-original-v1.json",
         stock_pool_path=repo_root / "packages" / "stock-presets" / "group-original-pool.json",
+        lake_root=Path(os.getenv("STOCK_RESEARCH_LAKE_DIR", str(data_dir / "cnequity"))).expanduser().resolve(),
     )

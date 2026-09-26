@@ -23,6 +23,8 @@ class BarSeries(list):
         self.adjustment = adjustment
         self.error = error
         self.fetched_at = market_now().isoformat()
+        self.source = "tencent-kline"
+        self.fallback_reason = None
 
 
 def parse_daily_rows(rows: list, *, now: datetime | None = None) -> list[DailyBar]:
@@ -69,10 +71,12 @@ def daily_metadata(bars: list[DailyBar]) -> dict:
     payload = [bar.model_dump(mode="json") for bar in bars]
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     adjustment = getattr(bars, "adjustment", "unknown")
-    return {"contract_version": CONTRACT_VERSION, "adjustment": adjustment,
-            "adjustment_anchor": "vendor_current" if adjustment == "qfq" else None,
-            "source": "tencent-kline" if isinstance(bars, BarSeries) else "unknown",
-            "volume_unit": "source_native", "content_sha256": digest,
+    return {"contract_version": getattr(bars, "contract_version", CONTRACT_VERSION), "adjustment": adjustment,
+            "adjustment_anchor": getattr(bars, "adjustment_anchor", "vendor_current" if adjustment == "qfq" else None),
+            "source": getattr(bars, "source", "unknown"),
+            "volume_unit": getattr(bars, "volume_unit", "source_native"), "content_sha256": digest,
+            "revisions": getattr(bars, "revisions", {}), "upstream_sources": getattr(bars, "upstream_sources", []),
+            "fallback_reason": getattr(bars, "fallback_reason", None),
             "fetched_at": getattr(bars, "fetched_at", None), "bar_count": len(bars),
             "coverage_start": bars[0].trade_date.isoformat() if bars else None,
             "coverage_end": bars[-1].trade_date.isoformat() if bars else None,
