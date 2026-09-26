@@ -168,6 +168,7 @@ class AnalysisReport(BaseModel):
     fund_flow: dict = Field(default_factory=dict)
     finance: dict = Field(default_factory=dict)
     industry: dict = Field(default_factory=dict)
+    industry_context: dict = Field(default_factory=dict)
     news: dict = Field(default_factory=dict)
     freshness: dict[str, dict] = Field(default_factory=dict)
     advice: Advice

@@ -16,6 +16,8 @@ from app.analysis.models import AnalysisReport, AnalysisRequest, DailyBar
 from app.analysis.rocket_score import calculate_rocket_score
 from app.market.scanner import StockPool
 from app.market.tencent import TencentQuoteProvider
+from app.market.daily_contract import BarSeries, daily_metadata, parse_tencent_daily
+from app.market.trading_calendar import calendar_status, latest_session
 from app.models import QuoteSnapshot, StockPreset, StockSearchResult
 
 
@@ -59,6 +61,13 @@ class IndividualAnalysisService:
         benchmark_bars = [] if preset.code == "sh000001" else self.fetch_bars("sh000001")
         benchmark = calculate_indicators(benchmark_bars) if benchmark_bars else None
         fund_flow, finance, industry, news = self.fetch_supplementary(preset.code, quote.stock_name or preset.name, quote, asset_type=preset.asset_type)
+        industry_context = self.cache.industry_context_for_stock(
+            preset.code, stock_return_20d_pct=technical.return_20d_pct,
+            stock_change_pct=quote.change_pct, sector_name=industry.name or preset.sector,
+        ) if self.cache is not None and hasattr(self.cache, "industry_context_for_stock") else {
+            "status": "unavailable", "source": "sqlite-industry-radar", "stock_code": preset.code,
+            "reason": "板块雷达快照未接入分析服务",
+        }
         core_quote_fields = {"price", "change_pct", "turnover_pct", "amplitude_pct"}
         if preset.asset_type == "stock":
             core_quote_fields |= {"pe", "pb"}
@@ -67,6 +76,9 @@ class IndividualAnalysisService:
             core_missing.append("daily_bars")
         if technical.bar_count < 60:
             core_missing.append("long_history")
+        daily_freshness = self._daily_freshness(bars)
+        if bars and daily_freshness["state"] != "fresh":
+            core_missing.append("daily_bars_freshness")
         rocket = calculate_rocket_score(
             change_pct=quote.change_pct, pe=quote.pe, main_flow_ratio=fund_flow.main_flow_ratio,
             sector_rank=industry.rank, volume_ratio=technical.volume_ratio, inout_ratio=None,
@@ -118,12 +130,23 @@ class IndividualAnalysisService:
             position_cost=request.position_cost, core_complete=not core_missing and bool(bars), asset_type=preset.asset_type,
             weekly=weekly,
         )
+        if daily_freshness["state"] != "fresh":
+            advice = advice.model_copy(update={
+                "action": "观望", "summary": daily_freshness["note"] +
+                ("；ETF仅按趋势模型研究，不使用个股财务评分" if preset.asset_type == "etf" else ""), "zones": [],
+                "operations": ["先补齐并核对最近完成交易日的日线，再重新分析"],
+                "unmet_conditions": list(dict.fromkeys(advice.unmet_conditions + [daily_freshness["note"]])),
+            })
         radar = build_radar(factors)
         diagnosis = build_diagnosis(price=quote.price, daily=technical, weekly=weekly, index_score=zhixing_index)
         diagnosis = diagnosis.model_copy(update={
             "positive_evidence": diagnosis.positive_evidence + [f"主力净流入占比 {fund_flow.main_flow_ratio * 100:+.2f}%" if fund_flow.main_flow_ratio is not None and fund_flow.main_flow_ratio > .02 else f"营收同比 {finance.revenue_yoy:+.1f}%" if finance.revenue_yoy is not None and finance.revenue_yoy > 5 else ""],
             "risk_evidence": diagnosis.risk_evidence + [f"主力净流出占比 {fund_flow.main_flow_ratio * 100:.2f}%" if fund_flow.main_flow_ratio is not None and fund_flow.main_flow_ratio < -.02 else f"营收同比 {finance.revenue_yoy:+.1f}%" if finance.revenue_yoy is not None and finance.revenue_yoy < -5 else ""],
         })
+        if daily_freshness["state"] != "fresh":
+            diagnosis = diagnosis.model_copy(update={
+                "risk_evidence": [daily_freshness["note"]] + diagnosis.risk_evidence,
+            })
         diagnosis = diagnosis.model_copy(update={
             "positive_evidence": [item for item in diagnosis.positive_evidence if item],
             "risk_evidence": [item for item in diagnosis.risk_evidence if item],
@@ -159,9 +182,11 @@ class IndividualAnalysisService:
             factors=factors, radar=radar, trend_series=trend_series(bars), diagnosis=diagnosis, advice=advice,
             facts={"input": request.model_dump(), "data_policy": "缺失字段显示为未接入，不用默认值伪造",
                    "benchmark": "sh000001" if benchmark_bars else None, "daily_bars": len(bars), "weekly_bars": len(weekly_bars),
+                   "daily_data": daily_metadata(bars), "benchmark_data": daily_metadata(benchmark_bars),
                    "algorithm_version": ZHIXING_ALGORITHM_VERSION, "rule_fingerprint": ZHIXING_RULE_FINGERPRINT},
             fund_flow=fund_flow.model_dump(mode="json"), finance=finance.model_dump(mode="json"),
-            industry=industry.model_dump(mode="json"), news=news.model_dump(mode="json"), bars=bars,
+            industry=industry.model_dump(mode="json"), industry_context=industry_context,
+            news=news.model_dump(mode="json"), bars=bars,
             freshness=freshness,
             weekly_bars=weekly_bars,
         )
@@ -247,10 +272,7 @@ class IndividualAnalysisService:
     def _freshness(self, quote: Any, bars: list[DailyBar], sources: dict[str, Any]) -> dict[str, dict]:
         now = datetime.now(timezone.utc)
         quote_age = max(0.0, (now - quote.fetched_at).total_seconds()) if quote.fetched_at else None
-        local_today = now.astimezone(timezone(timedelta(hours=8))).date()
-        expected_trade_date = local_today
-        while expected_trade_date.weekday() >= 5:
-            expected_trade_date -= timedelta(days=1)
+        expected_trade_date = latest_session(now, completed=False)
         quote_trade_date = quote.trade_at.date() if quote.trade_at else None
         result: dict[str, dict] = {
             "quote": self._freshness_entry("quote", quote.status, quote_age, quote.fetched_at,
@@ -258,14 +280,10 @@ class IndividualAnalysisService:
                                             trade_at=quote.trade_at,
                                             latest_trade_date=quote_trade_date,
                                             expected_trade_date=expected_trade_date),
-            "daily_bars": {
-                "label": "日线",
-                "state": "fresh" if bars else "unknown",
-                "latest_trade_date": bars[-1].trade_date.isoformat() if bars else None,
-                "bar_count": len(bars),
-                "note": "前复权日线" if bars else "暂无日线",
-            },
+            "daily_bars": self._daily_freshness(bars, now=now),
         }
+        if expected_trade_date is None and quote.status != "error":
+            result["quote"].update(state="unknown", note="交易日历超出覆盖范围，无法核对行情日期")
         for key, source in sources.items():
             result[key] = self._freshness_entry(
                 key, source.status, source.data_age_seconds, source.fetched_at,
@@ -275,6 +293,21 @@ class IndividualAnalysisService:
                 trade_date=getattr(source, "trade_date", None),
             )
         return result
+
+    @staticmethod
+    def _daily_freshness(bars: list[DailyBar], *, now: datetime | None = None) -> dict:
+        expected = latest_session(now)
+        latest = bars[-1].trade_date if bars else None
+        error = getattr(bars, "error", None)
+        state = "error" if not bars else "unknown" if expected is None else "fresh" if latest == expected else "warning"
+        note = error or ("暂无有效的已完成日线" if not bars else
+                        "交易日历超出覆盖范围，无法核对最新交易日" if expected is None else
+                        "日线日期与预期不一致，可能停牌、数据滞后或日期异常" if latest != expected else
+                        "已核对最近完成的交易日；盘中当日K线不参与收盘指标")
+        return {"label": "日线", "state": state, "bar_count": len(bars), "note": note,
+                "latest_trade_date": latest.isoformat() if latest else None,
+                "expected_trade_date": expected.isoformat() if expected else None,
+                "calendar": calendar_status(now), "error": error}
 
     @staticmethod
     def _freshness_entry(key: str, status: str, age: float | None, fetched_at: datetime | None,
@@ -386,19 +419,6 @@ class IndividualAnalysisService:
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
-            return []
-        rows = payload.get("data", {}).get(code, {}).get("qfqday") or payload.get("data", {}).get(code, {}).get("day") or []
-        bars: list[DailyBar] = []
-        for row in rows:
-            if len(row) < 6:
-                continue
-            try:
-                trade_date = date.fromisoformat(str(row[0]))
-                open_price, close, high, low, volume = (float(row[index]) for index in range(1, 6))
-                if min(open_price, close, high, low) <= 0:
-                    continue
-                bars.append(DailyBar(trade_date=trade_date, open=open_price, close=close, high=high, low=low, volume=max(volume, 0)))
-            except (TypeError, ValueError):
-                continue
-        return bars
+            return parse_tencent_daily(payload, code)
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+            return BarSeries(error=str(exc))

@@ -24,7 +24,7 @@ function App() {
   const refreshCandidates = () => api.listCandidates().then(result => setItems(result.candidates)).catch(() => setItems([]))
   useEffect(() => { void refreshCandidates() }, [])
 
-  async function refreshRadar() { setRadarLoading(true); try { setRadar(await api.industryRadar()) } catch { setRadar(null) } finally { setRadarLoading(false) } }
+  async function refreshRadar(force = false) { setRadarLoading(true); try { setRadar(await api.industryRadar(force)) } catch { setRadar(null) } finally { setRadarLoading(false) } }
   async function verifyPerformance() {
     setVerifying(true)
     try { setVerification(await api.verifyPerformance()); await refreshCandidates() }
@@ -55,7 +55,7 @@ function App() {
       <div className="nav-foot"><Database />仅本机存储 <span className="status-dot" /></div>
     </aside>
     <main>
-      {view === 'training' ? <KlineTraining /> : view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar()} onOpenStock={openStock} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
+      {view === 'training' ? <KlineTraining /> : view === 'research' ? <DeepResearch initialStock={analysisStock} /> : view === 'compare' ? <ComparePage onOpenStock={openStock} /> : view === 'radar' ? <IndustryRadarPage radar={radar} loading={radarLoading} onRefresh={() => void refreshRadar(true)} onOpenStock={openStock} /> : view === 'performance' ? <PerformanceReviewPage candidates={items} summary={verification} verifying={verifying} onVerify={() => void verifyPerformance()} onRefresh={() => void refreshCandidates()} /> : <SourceHealthPage health={sourceHealth} testing={testingSources} onTest={() => void testSourceHealth()} onRefresh={() => void refreshSourceHealth()} />}
     </main>
   </div>
 }

@@ -356,10 +356,39 @@ class IndustryConstituent(BaseModel):
     code: str
     name: str
     change_pct: float | None = None
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    relative_return_20d_pct: float | None = None
+    volume_ratio: float | None = None
+    ma20_above: bool | None = None
+    breakout_confirmed: bool = False
+    history_days: int = 0
+
+
+class IndustryHistoryPoint(BaseModel):
+    trade_date: date
+    close: float | None = None
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    return_60d_pct: float | None = None
+    relative_return_20d_pct: float | None = None
+    breadth_ma20_pct: float | None = None
+    breadth_ma60_pct: float | None = None
+    advance_ratio_pct: float | None = None
+    volume_ratio: float | None = None
+    breadth_source: str | None = None
+    coverage_pct: float | None = None
+
+
+class IndustryBenchmarkPoint(BaseModel):
+    trade_date: date
+    close: float
 
 
 class IndustryRadarItem(BaseModel):
+    industry_id: str = ""
     name: str
+    taxonomy: Literal["industry", "concept", "style", "special"] = "industry"
     stage: IndustryStage
     score: float | None = None
     low_position_score: float | None = None
@@ -370,7 +399,30 @@ class IndustryRadarItem(BaseModel):
     change_pct: float | None = None
     return_5d_pct: float | None = None
     return_20d_pct: float | None = None
+    return_60d_pct: float | None = None
+    relative_return_20d_pct: float | None = None
     drawdown_1y_pct: float | None = None
+    breadth_ma20_pct: float | None = None
+    breadth_ma60_pct: float | None = None
+    advance_ratio_pct: float | None = None
+    new_high_ratio_pct: float | None = None
+    volume_ratio: float | None = None
+    proxy_close: float | None = None
+    proxy_volume: float | None = None
+    index_source: str = "unavailable"
+    breadth_source: str = "unavailable"
+    history_days: int = 0
+    history_coverage_pct: float | None = None
+    history_missing_codes: list[str] = Field(default_factory=list)
+    history_semantics: str = "unknown"
+    stage_candidate: IndustryStage | None = None
+    stage_confirmation_days: int = 0
+    stage_confirmed_at: date | None = None
+    previous_stage: IndustryStage | None = None
+    stage_changed: bool = False
+    signal_direction: Literal["improving", "weakening", "neutral"] = "neutral"
+    execution_date: date | None = None
+    trade_date: date | None = None
     up_count: int | None = None
     down_count: int | None = None
     constituent_count: int | None = None
@@ -396,6 +448,13 @@ class IndustryRadarResponse(BaseModel):
     detail_constituent_observed: int = 0
     detail_constituent_total: int = 0
     history_snapshot_count: int = 0
+    last_success_trade_date: date | None = None
+    benchmark_return_20d_pct: float | None = None
+    benchmark_history: list[IndustryBenchmarkPoint] = Field(default_factory=list)
+    history_series: dict[str, list[IndustryHistoryPoint]] = Field(default_factory=dict)
+    history_failures: dict[str, str] = Field(default_factory=dict)
+    taxonomy_counts: dict[str, int] = Field(default_factory=dict)
+    ranking: list[IndustryRadarItem] = Field(default_factory=list)
     confirmation_days: int = 1
     rule_version: str = "industry-radar-v1"
     building: list[IndustryRadarItem] = Field(default_factory=list)
@@ -403,6 +462,51 @@ class IndustryRadarResponse(BaseModel):
     overheated: list[IndustryRadarItem] = Field(default_factory=list)
     other: list[IndustryRadarItem] = Field(default_factory=list)
     degraded_reasons: list[str] = Field(default_factory=list)
+
+
+class IndustryRadarDetailResponse(BaseModel):
+    item: IndustryRadarItem
+    history: list[IndustryHistoryPoint] = Field(default_factory=list)
+    stage_timeline: list[dict[str, str | float | None]] = Field(default_factory=list)
+    constituent_groups: dict[str, list[IndustryConstituent]] = Field(default_factory=dict)
+
+
+class IndustryWatchCreate(BaseModel):
+    industry_id: str = Field(min_length=3, max_length=160)
+
+
+class IndustryWatchItem(BaseModel):
+    industry_id: str
+    name: str
+    taxonomy: str
+    enabled: bool
+    created_at: datetime
+
+
+class IndustryAlert(BaseModel):
+    industry_id: str
+    name: str
+    stage: IndustryStage
+    direction: Literal["improving", "weakening", "neutral"]
+    trade_date: date | None = None
+    evidence: list[str] = Field(default_factory=list)
+
+
+class IndustrySignalOutcome(BaseModel):
+    signal_id: int
+    industry_id: str
+    signal_date: date
+    execution_date: date | None = None
+    signal_direction: Literal["improving", "weakening", "neutral"] = "neutral"
+    horizon: Literal["1d", "5d", "20d", "60d"]
+    return_pct: float | None = None
+    benchmark_return_pct: float | None = None
+    relative_return_pct: float | None = None
+    mfe_pct: float | None = None
+    mae_pct: float | None = None
+    status: Literal["pending", "verified", "unavailable"]
+    measured_at: datetime | None = None
+    note: str | None = None
 
 
 class DataSourceHealth(BaseModel):
@@ -477,6 +581,31 @@ class PerformanceVerificationResponse(BaseModel):
     unavailable: int
     outcomes: list[PerformanceOutcome]
     horizon_summary: list[PerformanceHorizonSummary] = Field(default_factory=list)
+
+
+class IndustrySignalVerificationResponse(BaseModel):
+    as_of: date
+    processed: int
+    verified: int
+    pending: int
+    unavailable: int
+    outcomes: list[IndustrySignalOutcome] = Field(default_factory=list)
+    horizon_summary: list[PerformanceHorizonSummary] = Field(default_factory=list)
+    direction_summary: list[dict[str, object]] = Field(default_factory=list)
+
+
+class IndustryTaskStatus(BaseModel):
+    enabled: bool
+    close_time: str
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_run_date: date | None = None
+    last_error: str | None = None
+    running: bool = False
+    attempts_today: int = 0
+    max_attempts_per_day: int = 3
+    next_retry_at: datetime | None = None
+    calendar: dict = Field(default_factory=dict)
 
 
 

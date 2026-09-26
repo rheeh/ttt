@@ -78,7 +78,7 @@ def test_all_a_snapshot_is_health_only_and_tracks_coverage():
 
 
 def test_daily_parser_builds_moving_averages():
-    rows = [[f"2026-07-{day:02d}", "0", str(day), "0", "0", "0"] for day in range(1, 31)]
+    rows = [[f"2026-07-{day:02d}", str(day), str(day), str(day), str(day), "0"] for day in range(1, 31)]
     indicators = TencentDailyProvider.parse_rows("sh600519", rows)
     assert indicators.status == "ok"
     assert indicators.bar_count == 30

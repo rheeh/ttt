@@ -61,6 +61,7 @@ export type AnalysisReport = {
   fund_flow: {trade_date?: string; main_inflow?: number; main_flow_ratio?: number; main_inflow_5d?: number; main_inflow_10d?: number; ratio_kind?: string; small_inflow?: number; medium_inflow?: number; large_inflow?: number; super_inflow?: number; source: string; endpoint?: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
   finance: {report_date?: string; notice_date?: string; revenue?: number; revenue_yoy?: number; profit?: number; profit_yoy?: number; roe?: number; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
   industry: {name?: string; rank?: number; total?: number; change_pct?: number; main_inflow?: number; constituent_count?: number; up_count?: number; down_count?: number; average_amount?: number; leader_name?: string; leader_change_pct?: number; source: string; endpoint?: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
+  industry_context: {status?: string; source?: string; stock_code?: string; trade_date?: string; industry_id?: string; industry_name?: string; taxonomy?: string; stage?: string; stage_candidate?: string; stage_confirmation_days?: number; stage_confirmed_at?: string; index_source?: string; breadth_source?: string; history_days?: number; rank?: number; total?: number; sector_return_20d_pct?: number; stock_return_20d_pct?: number; relative_return_20d_pct?: number; role?: '领涨'|'跟随'|'拖累'; evidence?: string[]; reason?: string};
   news: {items: {title: string; snippet: string; source_name: string; published_at: string; url: string; sentiment: 'bull'|'bear'|'neutral'}[]; source: string; fetched_at: string; status: string; error?: string; data_age_seconds?: number; cache_used?: boolean; cache_expired?: boolean};
   freshness: Record<string, {key?: string; state: 'fresh'|'warning'|'stale'|'expired'|'error'|'unknown'; fetched_at?: string; trade_at?: string; trade_date?: string; report_date?: string; latest_trade_date?: string; expected_trade_date?: string; bar_count?: number; note?: string; age_seconds?: number; warning_threshold_seconds?: number; cache_used?: boolean; cache_expired?: boolean}>;
   advice: {action: string; category: string; summary: string; risk_level: string; operations: string[]; triggered_conditions: string[]; unmet_conditions: string[]; invalidation_conditions: string[]; data_confidence: number; data_completeness: number; review_after: string; zones: {name: string; low: number; high: number; action: string; tone: string}[]};
@@ -73,17 +74,24 @@ export type StockSearchResult = {code: string; name: string; market?: string; as
 export type WatchlistItem = {id: number; code: string; name: string; sector: string; asset_type: 'stock'|'etf'; added_at: string; source: string}
 
 export type IndustryRadarItem = {
-  name: string; stage: '下跌中'|'低位企稳'|'底部改善'|'突破确认'|'高位拥挤'|'数据不足'; score?: number;
+  history_coverage_pct?: number; history_missing_codes?: string[]; history_semantics?: string;
+  industry_id: string; name: string; taxonomy: 'industry'|'concept'|'style'|'special'; stage: '下跌中'|'低位企稳'|'底部改善'|'突破确认'|'高位拥挤'|'数据不足'; score?: number;
   low_position_score?: number; deceleration_score?: number; breadth_score?: number;
   volume_price_score?: number; relative_strength_score?: number; change_pct?: number;
-  return_5d_pct?: number; return_20d_pct?: number; drawdown_1y_pct?: number;
+  return_5d_pct?: number; return_20d_pct?: number; return_60d_pct?: number; relative_return_20d_pct?: number; drawdown_1y_pct?: number;
+  breadth_ma20_pct?: number; breadth_ma60_pct?: number; advance_ratio_pct?: number; new_high_ratio_pct?: number; volume_ratio?: number; proxy_close?: number; proxy_volume?: number;
   up_count?: number; down_count?: number; constituent_count?: number; constituent_observed?: number; coverage_pct?: number;
-  constituents?: {code: string; name: string; change_pct?: number}[];
+  constituents: {code: string; name: string; change_pct?: number; return_5d_pct?: number; return_20d_pct?: number; relative_return_20d_pct?: number; volume_ratio?: number; ma20_above?: boolean; breakout_confirmed?: boolean; history_days?: number}[];
   evidence: string[]; risks: string[]; status: 'ok'|'degraded'|'error'; source: string; fetched_at: string;
 }
 export type IndustryRadar = {
   scope: 'all_industries'; snapshot_at: string; source: string; data_status: 'ok'|'degraded'|'error';
-  coverage_count: number; coverage_total: number; coverage_pct?: number; detail_board_count: number; detail_constituent_observed: number; detail_constituent_total: number; history_snapshot_count: number; confirmation_days: number;
+  coverage_count: number; coverage_total: number; coverage_pct?: number; detail_board_count: number; detail_constituent_observed: number; detail_constituent_total: number; history_snapshot_count: number; confirmation_days: number; last_success_trade_date?: string; benchmark_return_20d_pct?: number; benchmark_history?: {trade_date: string; close: number}[]; taxonomy_counts: Record<string, number>; ranking: IndustryRadarItem[];
   rule_version: string; building: IndustryRadarItem[]; confirmed: IndustryRadarItem[];
-  overheated: IndustryRadarItem[]; other: IndustryRadarItem[]; degraded_reasons: string[];
+  overheated: IndustryRadarItem[]; other: IndustryRadarItem[]; degraded_reasons: string[]; history_series?: Record<string, IndustryHistoryPoint[]>;
 }
+export type IndustryHistoryPoint = {trade_date: string; close?: number; return_5d_pct?: number; return_20d_pct?: number; return_60d_pct?: number; relative_return_20d_pct?: number; breadth_ma20_pct?: number; breadth_ma60_pct?: number; advance_ratio_pct?: number; new_high_ratio_pct?: number; volume_ratio?: number; breadth_source?: string; coverage_pct?: number}
+export type IndustryDetail = {item: IndustryRadarItem; history: IndustryHistoryPoint[]; stage_timeline: {trade_date: string; stage: string; score?: number}[]; constituent_groups: Record<string, IndustryRadarItem['constituents']>}
+export type IndustrySignalVerification = {as_of: string; processed: number; verified: number; pending: number; unavailable: number; outcomes: {signal_id: number; industry_id: string; signal_date: string; execution_date?: string; signal_direction: 'improving'|'weakening'|'neutral'; horizon: '1d'|'5d'|'20d'|'60d'; return_pct?: number; benchmark_return_pct?: number; relative_return_pct?: number; mfe_pct?: number; mae_pct?: number; status: 'pending'|'verified'|'unavailable'; note?: string}[]; horizon_summary: {horizon: '1d'|'5d'|'20d'|'60d'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_return_pct?: number; median_return_pct?: number; benchmark_code?: string; average_relative_return_pct?: number}[]; direction_summary: {horizon: string; direction: 'improving'|'weakening'|'neutral'; samples: number; verified: number; wins: number; win_rate_pct?: number; average_mfe_pct?: number; average_mae_pct?: number}[]}
+export type IndustryWatchItem = {industry_id: string; name: string; taxonomy: string; enabled: boolean; created_at: string}
+export type IndustryAlert = {industry_id: string; name: string; stage: IndustryRadarItem['stage']; direction: 'improving'|'weakening'|'neutral'; trade_date?: string; evidence: string[]}

@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.models import DailyIndicators, QuoteSnapshot, StockPreset
+from app.market.daily_contract import parse_daily_rows
 
 
 class AkshareQuoteProvider:
@@ -122,8 +123,10 @@ class AkshareDailyProvider:
             try:
                 frame = _retry_call(lambda: ak.stock_zh_a_hist(symbol=item.code[2:], period="daily", start_date=start, end_date=end, adjust="qfq"), attempts=2)
                 rows = frame.to_dict("records")
-                closes = [float(row["收盘"]) for row in rows if row.get("收盘") not in (None, "-") and float(row["收盘"]) > 0]
-                dates = [str(row.get("日期")) for row in rows if row.get("收盘") not in (None, "-")]
+                bars = parse_daily_rows([[row.get("日期"), row.get("开盘"), row.get("收盘"),
+                                          row.get("最高"), row.get("最低"), row.get("成交量")] for row in rows])
+                closes = [bar.close for bar in bars]
+                dates = [bar.trade_date.isoformat() for bar in bars]
                 if len(closes) < 20:
                     raise ValueError("fewer than 20 valid daily bars")
                 result[item.code] = DailyIndicators(

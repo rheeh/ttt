@@ -43,7 +43,7 @@ function RadarChart({dimensions}: {dimensions: AnalysisReport['radar']}) {
 
 function SourceBadge({status, source, endpoint, cacheExpired, error}: {status: string; source: string; endpoint?: string; cacheExpired?: boolean; error?: string}) {
   const label = status === 'ok' ? '已接入' : status === 'stale' ? '使用缓存' : cacheExpired ? '缓存过期' : source.includes('tencent-qt-extension') ? '腾讯降级源' : status === 'degraded' ? '字段缺失' : status === 'error' ? '获取失败' : '状态未知'
-  return <span className={`source-badge ${status}`} title={error || undefined}>{label} · {source}{endpoint ? ` · ${endpoint}` : ''}</span>
+  return <span className={`source-badge ${status}`} style={{maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere'}} title={error || undefined}>{label} · {source}{endpoint ? ` · ${endpoint}` : ''}</span>
 }
 
 function NumberValue({value, suffix = ''}: {value?: number; suffix?: string}) {
@@ -71,7 +71,7 @@ function FreshnessItem({label, info, fallback}: {label: string; info?: Freshness
   const stateLabel = state === 'fresh' ? '实时/新鲜' : state === 'warning' ? '接近过期' : state === 'stale' ? '使用缓存' : state === 'expired' ? '缓存已过期' : state === 'error' ? '获取失败' : '暂无记录'
   const agePrefix = state === 'error' ? '请求于' : state === 'expired' ? '检查于' : state === 'stale' ? '缓存于' : '更新于'
   const detail = info?.latest_trade_date ? `交易日 ${info.latest_trade_date}${info.expected_trade_date && info.latest_trade_date < info.expected_trade_date ? ` · 应有 ${info.expected_trade_date}` : ''}${info.fetched_at ? ` · 抓取 ${new Date(info.fetched_at).toLocaleTimeString('zh-CN')}` : ''}` : info?.report_date ? `报告期 ${info.report_date}` : info?.trade_date ? `交易日 ${info.trade_date}` : info?.age_seconds != null ? `${agePrefix} ${freshnessAge(info.age_seconds)}` : fallback ?? '时间未知'
-  return <div className={`freshness-item freshness-${state}`}><div><strong>{label}</strong><span>{stateLabel}</span></div><small>{detail}</small></div>
+  return <div className={`freshness-item freshness-${state}`}><div><strong>{label}</strong><span>{stateLabel}</span></div><small>{detail}</small>{info?.note && <small style={{whiteSpace: 'normal', overflowWrap: 'anywhere'}}>{info.note}</small>}</div>
 }
 
 function TechnicalGuide() {

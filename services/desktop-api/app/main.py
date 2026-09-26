@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import csv
+import io
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from app.database import CandidateRepository
 from app.analysis.models import AnalysisReport, AnalysisRequest, AnalysisSignalCandidateRequest, AnalysisSnapshotRequest, AnalysisSnapshotResponse, CompareRequest, CompareResponse
@@ -18,9 +21,11 @@ from app.market.tencent import TencentQuoteProvider
 from app.market.tencent_daily import TencentDailyProvider
 from app.market.all_a_snapshot import AllAMarketSnapshotProvider
 from app.market.industry_radar import IndustryRadarProvider
+from app.market.constituent_history import TencentConstituentHistoryProvider
+from app.market.industry_scheduler import IndustryRadarScheduler
 from app.models import (
     CandidateBatchRequest, CandidateBatchResponse, CandidateCreate, CandidateItem, CandidateList, CandidateUpdate,
-    AllAMarketSnapshot, DataSourceHealthResponse, IndustryRadarResponse, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
+    AllAMarketSnapshot, DataSourceHealthResponse, IndustryAlert, IndustryRadarResponse, IndustryRadarDetailResponse, IndustrySignalVerificationResponse, IndustryTaskStatus, IndustryWatchCreate, IndustryWatchItem, MarketReviewResponse, MarketReviewRun, MarketScanRequest, MarketScanResponse, PerformanceVerificationResponse, PoolResponse, QuoteSnapshot,
     ScoreInput, ScoreResult, StockSearchResult, WatchlistCreate, WatchlistItem,
 )
 from app.scoring import StrategyEngine
@@ -47,8 +52,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.analysis_service = IndividualAnalysisService(app.state.pool, quote_provider, cache=app.state.candidates)
     app.state.all_a_snapshot = AllAMarketSnapshotProvider()
-    app.state.industry_radar = IndustryRadarProvider()
-    yield
+    app.state.industry_history = TencentConstituentHistoryProvider(days=150, cache_path=settings.database_path)
+    app.state.industry_radar = IndustryRadarProvider(history_provider=app.state.industry_history)
+    app.state.industry_scheduler = IndustryRadarScheduler(
+        lambda: _refresh_industry_snapshot(app.state.candidates, app.state.industry_radar, include_history=True, require_complete=True),
+        state_path=settings.database_path,
+    )
+    app.state.industry_scheduler.start()
+    try:
+        yield
+    finally:
+        app.state.industry_scheduler.stop()
 
 
 app = FastAPI(
@@ -112,11 +126,143 @@ def save_scan_candidates(payload: CandidateBatchRequest, request: Request) -> Ca
     return CandidateBatchResponse(run_id=payload.run_id, created=len(created), skipped=max(0, len(pairs) - len(created)), candidates=created)
 
 
+def _refresh_industry_snapshot(repo: CandidateRepository, provider: IndustryRadarProvider, *, include_history: bool = False,
+                               require_complete: bool = False) -> IndustryRadarResponse:
+    raw = provider.fetch(include_history=include_history)
+    if raw.data_status == "error":
+        if require_complete:
+            raise RuntimeError("；".join(raw.degraded_reasons) or "板块采集失败，保留上次成功快照")
+        cached = repo.latest_industry_snapshot()
+        if cached is None:
+            return raw
+        return cached.model_copy(update={
+            "data_status": "degraded",
+            "degraded_reasons": list(dict.fromkeys([
+                *cached.degraded_reasons,
+                "本次更新失败，正在显示上次保存的板块快照",
+                *raw.degraded_reasons,
+            ])),
+        })
+    snapshot = provider.enrich_history(raw, repo.list_industry_history())
+    repo.save_industry_snapshot(snapshot)
+    missing_boards = snapshot.coverage_total - snapshot.coverage_count
+    if require_complete and (snapshot.history_failures or missing_boards > 0):
+        raise RuntimeError(f"{max(0, missing_boards)}个板块详情、{len(snapshot.history_failures)}只成分历史采集失败；成功部分已缓存，下次补缺失或过期数据")
+    return snapshot
+
+
+def _industry_snapshot(request: Request, *, refresh: bool) -> IndustryRadarResponse:
+    repo = candidates(request)
+    snapshot = None if refresh else repo.latest_industry_snapshot()
+    if refresh:
+        snapshot = _refresh_industry_snapshot(repo, request.app.state.industry_radar, include_history=False)
+    if snapshot is None:
+        return IndustryRadarResponse(
+            snapshot_at=datetime.now(timezone.utc), source="sina-industry-radar", data_status="degraded",
+            coverage_count=0, coverage_total=0,
+            degraded_reasons=["本机尚无板块快照，请在数据状态与维护中更新数据；读取页面不会自动发起采集"],
+        )
+    history_count = len(repo.list_industry_history())
+    return snapshot.model_copy(update={
+        "history_snapshot_count": history_count,
+        "last_success_trade_date": snapshot.last_success_trade_date,
+    })
+
+
 @app.get("/api/market/industry-radar", response_model=IndustryRadarResponse)
 def industry_radar(request: Request) -> IndustryRadarResponse:
-    snapshot = request.app.state.industry_radar.fetch()
-    history_count = candidates(request).save_industry_snapshot(snapshot)
+    """Read the latest SQLite snapshot; the UI does not block on upstream data."""
+    return _industry_snapshot(request, refresh=False)
+
+
+@app.post("/api/market/industry-radar/refresh", response_model=IndustryRadarResponse)
+def refresh_industry_radar(request: Request) -> IndustryRadarResponse:
+    return _industry_snapshot(request, refresh=True)
+
+
+@app.post("/api/market/industry-radar/backfill", response_model=IndustryRadarResponse)
+def backfill_industry_radar(request: Request) -> IndustryRadarResponse:
+    """Run the expensive 120+ trading-day constituent backfill explicitly."""
+    try:
+        snapshot = request.app.state.industry_scheduler.run_now()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    history_count = len(candidates(request).list_industry_history())
     return snapshot.model_copy(update={"history_snapshot_count": history_count})
+
+
+@app.get("/api/market/industry-radar/tasks", response_model=IndustryTaskStatus)
+def industry_radar_task_status(request: Request) -> IndustryTaskStatus:
+    return IndustryTaskStatus.model_validate(request.app.state.industry_scheduler.status())
+
+
+@app.get("/api/market/industry-radar/watches", response_model=list[IndustryWatchItem])
+def list_industry_watches(request: Request) -> list[IndustryWatchItem]:
+    return candidates(request).list_industry_watches()
+
+
+@app.post("/api/market/industry-radar/watches", response_model=IndustryWatchItem, status_code=201)
+def add_industry_watch(payload: IndustryWatchCreate, request: Request) -> IndustryWatchItem:
+    try:
+        return candidates(request).add_industry_watch(payload.industry_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="板块不存在") from exc
+
+
+@app.get("/api/market/industry-radar/alerts", response_model=list[IndustryAlert])
+def industry_alerts(request: Request) -> list[IndustryAlert]:
+    return candidates(request).industry_alerts()
+
+
+@app.get("/api/market/industry-radar/export")
+def export_industry_radar(
+    request: Request,
+    format: str = Query(default="csv", pattern="^(csv|json)$"),
+) -> Response:
+    rows = candidates(request).industry_export_rows()
+    if format == "json":
+        return Response(
+            content=json.dumps(rows, ensure_ascii=False, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=industry-radar.json"},
+        )
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(rows[0]) if rows else ["trade_date", "industry_id", "name"])
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(
+        content="\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=industry-radar.csv"},
+    )
+
+
+@app.get("/api/backup")
+def backup_database(request: Request) -> Response:
+    return Response(
+        content=candidates(request).backup_bytes(), media_type="application/vnd.sqlite3",
+        headers={"Content-Disposition": "attachment; filename=zhixing-research.sqlite3"},
+    )
+
+
+@app.get("/api/market/industry-radar/{industry_key}", response_model=IndustryRadarDetailResponse)
+def industry_radar_detail(industry_key: str, request: Request) -> IndustryRadarDetailResponse:
+    detail = candidates(request).industry_detail(industry_key)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="板块详情不存在")
+    return detail
+
+
+@app.post("/api/market/industry-radar/signals/verify", response_model=IndustrySignalVerificationResponse)
+def verify_industry_signals(request: Request, as_of: date | None = Query(default=None)) -> IndustrySignalVerificationResponse:
+    effective_date = as_of or date.today()
+    return candidates(request).verify_industry_signals(effective_date)
+
+
+@app.delete("/api/market/industry-radar/watches/{industry_key}")
+def delete_industry_watch(industry_key: str, request: Request) -> dict[str, bool]:
+    if not candidates(request).delete_industry_watch(industry_key):
+        raise HTTPException(status_code=404, detail="板块提醒不存在")
+    return {"deleted": True}
 
 
 @app.get("/api/market/review", response_model=MarketReviewResponse, include_in_schema=False)

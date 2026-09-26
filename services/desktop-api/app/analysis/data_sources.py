@@ -34,6 +34,8 @@ class FundFlowFacts(BaseModel):
 
 
 class FinanceFacts(BaseModel):
+    history_semantics: str = "latest_snapshot"
+    pit_quality: str = "snapshot_only"
     report_date: str | None = None
     notice_date: str | None = None
     revenue: float | None = None

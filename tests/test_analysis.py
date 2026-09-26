@@ -231,8 +231,10 @@ def test_analysis_api_returns_without_saving_and_explicit_snapshot_is_deduplicat
         payload = response.json()
         assert payload["report_id"] is None
         assert payload["technical"]["ma20"] is not None
-        assert payload["rocket"]["dimensions"] and payload["status"] == "ok"
-        assert payload["core_status"] == "ok"
+        assert payload["rocket"]["dimensions"] and payload["status"] == "degraded"
+        assert payload["core_status"] == "degraded"
+        assert "daily_bars_freshness" in payload["core_missing_fields"]
+        assert payload["freshness"]["daily_bars"]["state"] == "warning"
         assert payload["legacy_score_status"] == "degraded"
         assert payload["zhixing_index"] >= 0
         assert len(payload["factors"]) == 10

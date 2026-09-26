@@ -10,6 +10,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
+from app.market.daily_contract import parse_tencent_daily
+from app.market.trading_calendar import market_now
 
 INITIAL_CASH = 100_000.0
 WARMUP = 60
@@ -36,7 +38,7 @@ def valid_bars(rows: list[dict]) -> list[dict]:
         if day <= previous:
             raise ValueError("历史行情日期重复或未按时间递增")
         previous = day
-        if parsed >= date.today():
+        if parsed >= market_now().date():
             continue
         numbers = {key: float(row[key]) for key in ("open", "close", "high", "low", "volume")}
         if not all(math.isfinite(value) for value in numbers.values()):
@@ -54,10 +56,7 @@ class TrainingHistoryProvider:
         request = Request("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + query, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"})
         with urlopen(request, timeout=6) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        if payload.get("code") != 0:
-            raise ValueError("行情源暂不可用")
-        rows = payload.get("data", {}).get(code, {}).get("qfqday", [])
-        return valid_bars([dict(zip(("trade_date", "open", "close", "high", "low", "volume"), row[:6])) for row in rows if len(row) >= 6])
+        return valid_bars([bar.model_dump(mode="json") for bar in parse_tencent_daily(payload, code)])
 
 
 def cents(value: float) -> float:

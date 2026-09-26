@@ -10,7 +10,8 @@ from statistics import median
 from app.analysis.models import AnalysisReport
 from app.models import (
     CandidateCreate, CandidateItem, CandidateUpdate, DataSourceHealth, MarketReviewResponse, MarketReviewItem, MarketReviewRun, MarketScanResponse, MarketSectorReview,
-    IndustryRadarResponse, PerformanceHorizonSummary, PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
+    IndustryAlert, IndustryConstituent, IndustryHistoryPoint, IndustryRadarDetailResponse, IndustryRadarItem, IndustryRadarResponse, IndustryWatchItem, PerformanceHorizonSummary, PerformanceOutcome, PriceZones, QuoteSnapshot, ScoreInput, ScoreResult, WatchlistCreate, WatchlistItem,
+    IndustrySignalOutcome, IndustrySignalVerificationResponse,
 )
 
 
@@ -152,6 +153,83 @@ CREATE TABLE IF NOT EXISTS industry_daily_snapshots (
     UNIQUE(snapshot_date, source, rule_version)
 );
 CREATE INDEX IF NOT EXISTS ix_industry_snapshot_date ON industry_daily_snapshots(snapshot_date DESC);
+CREATE TABLE IF NOT EXISTS industry_master (
+    industry_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    taxonomy TEXT NOT NULL,
+    source TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS industry_constituents (
+    industry_id TEXT NOT NULL,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT NOT NULL,
+    effective_from TEXT NOT NULL,
+    effective_to TEXT,
+    source TEXT NOT NULL,
+    PRIMARY KEY(industry_id, stock_code, effective_from)
+);
+CREATE INDEX IF NOT EXISTS ix_industry_constituents_code ON industry_constituents(stock_code);
+CREATE TABLE IF NOT EXISTS industry_daily (
+    industry_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    close REAL,
+    return_5d REAL,
+    return_20d REAL,
+    return_60d REAL,
+    relative_return_20d REAL,
+    breadth_ma20 REAL,
+    breadth_ma60 REAL,
+    advance_ratio REAL,
+    new_high_ratio REAL,
+    volume_ratio REAL,
+    coverage_pct REAL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(industry_id, trade_date)
+);
+CREATE INDEX IF NOT EXISTS ix_industry_daily_date ON industry_daily(trade_date DESC);
+CREATE TABLE IF NOT EXISTS industry_benchmark_daily (
+    benchmark_code TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY(benchmark_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS ix_industry_benchmark_date ON industry_benchmark_daily(benchmark_code, trade_date DESC);
+CREATE TABLE IF NOT EXISTS industry_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    industry_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    score REAL,
+    rule_version TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    risk_json TEXT NOT NULL,
+    signal_direction TEXT NOT NULL DEFAULT 'neutral',
+    execution_date TEXT,
+    confirmation_days INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(industry_id, trade_date, rule_version)
+);
+CREATE TABLE IF NOT EXISTS industry_signal_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL REFERENCES industry_signals(id) ON DELETE CASCADE,
+    horizon TEXT NOT NULL,
+    return_pct REAL,
+    benchmark_return_pct REAL,
+    relative_return_pct REAL,
+    mfe_pct REAL,
+    mae_pct REAL,
+    execution_date TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'unavailable')),
+    measured_at TEXT,
+    note TEXT,
+    UNIQUE(signal_id, horizon)
+);
+CREATE TABLE IF NOT EXISTS industry_watchlist (
+    industry_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS data_source_health (
     source TEXT PRIMARY KEY,
     category TEXT NOT NULL,
@@ -264,6 +342,25 @@ class CandidateRepository:
                 if name not in analysis_columns:
                     connection.execute(f"ALTER TABLE analysis_reports ADD COLUMN {name} {definition}")
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_reports_fingerprint ON analysis_reports(content_fingerprint) WHERE content_fingerprint IS NOT NULL")
+            outcome_columns = {row["name"] for row in connection.execute("PRAGMA table_info(industry_signal_outcomes)")}
+            outcome_migrations = {
+                "status": "TEXT NOT NULL DEFAULT 'pending'",
+                "measured_at": "TEXT",
+                "note": "TEXT",
+                "execution_date": "TEXT",
+            }
+            for name, definition in outcome_migrations.items():
+                if name not in outcome_columns:
+                    connection.execute(f"ALTER TABLE industry_signal_outcomes ADD COLUMN {name} {definition}")
+            signal_columns = {row["name"] for row in connection.execute("PRAGMA table_info(industry_signals)")}
+            signal_migrations = {
+                "signal_direction": "TEXT NOT NULL DEFAULT 'neutral'",
+                "execution_date": "TEXT",
+                "confirmation_days": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in signal_migrations.items():
+                if name not in signal_columns:
+                    connection.execute(f"ALTER TABLE industry_signals ADD COLUMN {name} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)
@@ -555,6 +652,7 @@ class CandidateRepository:
 
     def save_industry_snapshot(self, snapshot: IndustryRadarResponse) -> int:
         snapshot_date = snapshot.snapshot_at.date().isoformat()
+        items = self._industry_items(snapshot)
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO industry_daily_snapshots
@@ -566,11 +664,405 @@ class CandidateRepository:
                 (snapshot_date, snapshot.snapshot_at.isoformat(), snapshot.source, snapshot.rule_version,
                  snapshot.data_status, snapshot.model_dump_json()),
             )
+            for point in snapshot.benchmark_history:
+                connection.execute(
+                    """INSERT INTO industry_benchmark_daily(benchmark_code, trade_date, close)
+                    VALUES ('sh000300', ?, ?)
+                    ON CONFLICT(benchmark_code, trade_date) DO UPDATE SET close=excluded.close""",
+                    (point.trade_date.isoformat(), point.close),
+                )
+            for item in items:
+                item_date = item.trade_date.isoformat() if item.trade_date else snapshot_date
+                connection.execute(
+                    """INSERT INTO industry_master(industry_id, name, taxonomy, source, active, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(industry_id) DO UPDATE SET name=excluded.name, taxonomy=excluded.taxonomy,
+                      source=excluded.source, active=1, updated_at=excluded.updated_at""",
+                    (item.industry_id, item.name, item.taxonomy, item.source, snapshot.snapshot_at.isoformat()),
+                )
+                for constituent in item.constituents:
+                    connection.execute(
+                        """INSERT OR REPLACE INTO industry_constituents
+                        (industry_id, stock_code, stock_name, effective_from, effective_to, source)
+                        VALUES (?, ?, ?, ?, NULL, ?)""",
+                        (item.industry_id, constituent.code, constituent.name, item_date, item.source),
+                    )
+                for point in snapshot.history_series.get(item.industry_id, []):
+                    connection.execute(
+                        """INSERT INTO industry_daily
+                        (industry_id, trade_date, close, return_5d, return_20d, return_60d,
+                         relative_return_20d, breadth_ma20, breadth_ma60, advance_ratio,
+                         new_high_ratio, volume_ratio, coverage_pct, payload_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(industry_id, trade_date) DO UPDATE SET
+                          close=excluded.close, breadth_ma20=excluded.breadth_ma20,
+                          breadth_ma60=excluded.breadth_ma60, advance_ratio=excluded.advance_ratio,
+                          new_high_ratio=excluded.new_high_ratio, volume_ratio=excluded.volume_ratio,
+                          coverage_pct=excluded.coverage_pct, payload_json=excluded.payload_json""",
+                        (item.industry_id, point.trade_date.isoformat(), point.close, point.return_5d_pct,
+                         point.return_20d_pct, point.return_60d_pct, point.relative_return_20d_pct,
+                         point.breadth_ma20_pct, point.breadth_ma60_pct, point.advance_ratio_pct,
+                         point.new_high_ratio_pct, point.volume_ratio, point.coverage_pct,
+                         point.model_dump_json()),
+                    )
+                connection.execute(
+                    """INSERT INTO industry_daily
+                    (industry_id, trade_date, close, return_5d, return_20d, return_60d,
+                     relative_return_20d, breadth_ma20, breadth_ma60, advance_ratio,
+                     new_high_ratio, volume_ratio, coverage_pct, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(industry_id, trade_date) DO UPDATE SET
+                      close=excluded.close, return_5d=excluded.return_5d,
+                      return_20d=excluded.return_20d, return_60d=excluded.return_60d,
+                      relative_return_20d=excluded.relative_return_20d,
+                      breadth_ma20=excluded.breadth_ma20, breadth_ma60=excluded.breadth_ma60,
+                      advance_ratio=excluded.advance_ratio, new_high_ratio=excluded.new_high_ratio,
+                      volume_ratio=excluded.volume_ratio, coverage_pct=excluded.coverage_pct,
+                      payload_json=excluded.payload_json""",
+                    (item.industry_id, item_date, item.proxy_close, item.return_5d_pct,
+                     item.return_20d_pct, item.return_60d_pct, item.relative_return_20d_pct,
+                     item.breadth_ma20_pct, item.breadth_ma60_pct, item.advance_ratio_pct,
+                     item.new_high_ratio_pct, item.volume_ratio, item.coverage_pct, item.model_dump_json()),
+                )
+                signal_date = item.stage_confirmed_at.isoformat() if item.stage_confirmed_at else None
+                signal_exists = False
+                if signal_date:
+                    signal_exists = connection.execute(
+                        "SELECT 1 FROM industry_signals WHERE industry_id=? AND trade_date=? AND rule_version=?",
+                        (item.industry_id, signal_date, snapshot.rule_version),
+                    ).fetchone() is not None
+                if item.stage_changed or (signal_date and not signal_exists):
+                    connection.execute(
+                        """INSERT INTO industry_signals
+                        (industry_id, trade_date, stage, score, rule_version, evidence_json, risk_json,
+                         signal_direction, execution_date, confirmation_days)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(industry_id, trade_date, rule_version) DO UPDATE SET
+                          stage=excluded.stage, score=excluded.score, evidence_json=excluded.evidence_json,
+                          risk_json=excluded.risk_json, signal_direction=excluded.signal_direction,
+                          execution_date=excluded.execution_date, confirmation_days=excluded.confirmation_days""",
+                        (item.industry_id, signal_date or item_date, item.stage, item.score, snapshot.rule_version,
+                         json.dumps(item.evidence, ensure_ascii=False), json.dumps(item.risks, ensure_ascii=False),
+                         item.signal_direction, item.execution_date.isoformat() if item.execution_date else None,
+                         item.stage_confirmation_days),
+                    )
             row = connection.execute(
                 "SELECT COUNT(*) AS count FROM industry_daily_snapshots WHERE source = ? AND rule_version = ?",
                 (snapshot.source, snapshot.rule_version),
             ).fetchone()
         return int(row["count"])
+
+    @staticmethod
+    def _industry_items(snapshot: IndustryRadarResponse) -> list[IndustryRadarItem]:
+        seen: set[str] = set()
+        items: list[IndustryRadarItem] = []
+        for group in (snapshot.ranking, snapshot.building, snapshot.confirmed, snapshot.overheated, snapshot.other):
+            for item in group:
+                if item.industry_id not in seen:
+                    seen.add(item.industry_id)
+                    items.append(item)
+        return items
+
+    def latest_industry_snapshot(self, source: str = "sina-industry-radar") -> IndustryRadarResponse | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM industry_daily_snapshots WHERE source = ? ORDER BY snapshot_date DESC LIMIT 1",
+                (source,),
+            ).fetchone()
+        return IndustryRadarResponse.model_validate_json(row["payload_json"]) if row else None
+
+    def list_industry_history(self, source: str = "sina-industry-radar", limit: int = 90) -> list[IndustryRadarResponse]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM industry_daily_snapshots WHERE source = ? ORDER BY snapshot_date DESC LIMIT ?",
+                (source, limit),
+            ).fetchall()
+        return [IndustryRadarResponse.model_validate_json(row["payload_json"]) for row in reversed(rows)]
+
+    def industry_detail(self, industry_key: str, limit: int = 120) -> IndustryRadarDetailResponse | None:
+        snapshots = self.list_industry_history(limit=limit)
+        current: IndustryRadarItem | None = None
+        for snapshot in reversed(snapshots):
+            for item in self._industry_items(snapshot):
+                if item.industry_id == industry_key:
+                    current = item
+                    break
+            if current:
+                break
+        if current is None:
+            return None
+        history: list[IndustryHistoryPoint] = []
+        stage_timeline: list[dict[str, str | float | None]] = []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT d.trade_date, d.close, d.return_5d, d.return_20d, d.return_60d,
+                   d.relative_return_20d, d.breadth_ma20, d.breadth_ma60, d.advance_ratio,
+                   d.new_high_ratio, d.volume_ratio, d.coverage_pct, d.payload_json, s.stage, s.score
+                   FROM industry_daily d LEFT JOIN industry_signals s
+                   ON s.industry_id=d.industry_id AND s.trade_date=d.trade_date
+                   WHERE d.industry_id=? ORDER BY d.trade_date DESC LIMIT ?""",
+                (industry_key, limit),
+            ).fetchall()
+        for row in reversed(rows):
+            payload = json.loads(row["payload_json"] or "{}")
+            history.append(IndustryHistoryPoint(
+                trade_date=date.fromisoformat(row["trade_date"]), close=row["close"],
+                return_5d_pct=row["return_5d"], return_20d_pct=row["return_20d"],
+                return_60d_pct=row["return_60d"], relative_return_20d_pct=row["relative_return_20d"],
+                breadth_ma20_pct=row["breadth_ma20"], breadth_ma60_pct=row["breadth_ma60"],
+                advance_ratio_pct=row["advance_ratio"], new_high_ratio_pct=row["new_high_ratio"],
+                volume_ratio=row["volume_ratio"], coverage_pct=row["coverage_pct"],
+                breadth_source=payload.get("breadth_source"),
+            ))
+            if row["stage"]:
+                stage_timeline.append({"trade_date": row["trade_date"], "stage": row["stage"], "score": row["score"]})
+        return IndustryRadarDetailResponse(
+            item=current, history=history, stage_timeline=stage_timeline,
+            constituent_groups=self._industry_constituent_groups(current),
+        )
+
+    @staticmethod
+    def _industry_constituent_groups(item: IndustryRadarItem) -> dict[str, list[IndustryConstituent]]:
+        """Partition constituents using persisted, inspectable evidence fields."""
+        groups: dict[str, list[IndustryConstituent]] = {
+            "领涨核心": [], "低位改善": [], "突破确认": [], "内部拖累": [],
+        }
+        for stock in item.constituents:
+            relative = stock.relative_return_20d_pct
+            if stock.history_days < 60 or relative is None:
+                continue
+            if stock.breakout_confirmed and relative >= 0:
+                groups["突破确认"].append(stock)
+            elif relative >= 1 and stock.ma20_above:
+                groups["领涨核心"].append(stock)
+            elif (stock.return_20d_pct is not None and stock.return_20d_pct < 0 and (stock.return_5d_pct or 0) > 0):
+                groups["低位改善"].append(stock)
+            elif relative <= -1 or stock.ma20_above is False:
+                groups["内部拖累"].append(stock)
+        for values in groups.values():
+            values.sort(key=lambda stock: stock.relative_return_20d_pct or -999, reverse=True)
+        return groups
+
+    def industry_context_for_stock(
+        self, stock_code: str, *, stock_return_20d_pct: float | None = None,
+        stock_change_pct: float | None = None, sector_name: str | None = None,
+    ) -> dict[str, object]:
+        """Return the latest radar context without making an upstream request."""
+        snapshot = self.latest_industry_snapshot()
+        unavailable: dict[str, object] = {
+            "status": "unavailable", "source": "sqlite-industry-radar",
+            "stock_code": stock_code, "reason": "尚无包含该股票的板块快照",
+        }
+        if snapshot is None:
+            return unavailable
+        normalized = stock_code.lower().strip()
+        items = self._industry_items(snapshot)
+        item = next((candidate for candidate in items if any(member.code.lower().strip() == normalized for member in candidate.constituents)), None)
+        if item is None and sector_name:
+            item = next((candidate for candidate in items if candidate.name == sector_name), None)
+        if item is None:
+            return unavailable | {"trade_date": snapshot.last_success_trade_date, "reason": "最新板块成分映射未覆盖该股票"}
+        industry_items = [candidate for candidate in items if candidate.taxonomy == "industry" and candidate.return_20d_pct is not None]
+        industry_items.sort(key=lambda candidate: candidate.return_20d_pct or -999, reverse=True)
+        rank = next((index for index, candidate in enumerate(industry_items, start=1) if candidate.industry_id == item.industry_id), None)
+        member = next((candidate for candidate in item.constituents if candidate.code.lower().strip() == normalized), None)
+        member_return = stock_return_20d_pct if stock_return_20d_pct is not None else (member.return_20d_pct if member else None)
+        sector_return = item.return_20d_pct
+        relative = member_return - sector_return if member_return is not None and sector_return is not None else None
+        if relative is None and stock_change_pct is not None and item.change_pct is not None:
+            relative = stock_change_pct - item.change_pct
+        role = "领涨" if relative is not None and relative >= 1 else "拖累" if relative is not None and relative <= -1 else "跟随"
+        return {
+            "status": "ok" if item.history_days >= 120 else "degraded", "source": "sqlite-industry-radar",
+            "stock_code": stock_code, "trade_date": item.trade_date or snapshot.last_success_trade_date,
+            "industry_id": item.industry_id, "industry_name": item.name, "taxonomy": item.taxonomy,
+            "stage": item.stage, "stage_candidate": item.stage_candidate,
+            "stage_confirmation_days": item.stage_confirmation_days, "stage_confirmed_at": item.stage_confirmed_at,
+            "index_source": item.index_source, "breadth_source": item.breadth_source,
+            "history_days": item.history_days, "rank": rank, "total": len(industry_items),
+            "sector_return_20d_pct": sector_return, "stock_return_20d_pct": member_return,
+            "relative_return_20d_pct": round(relative, 2) if relative is not None else None,
+            "role": role, "evidence": item.evidence,
+        }
+
+    def add_industry_watch(self, industry_id: str) -> IndustryWatchItem:
+        snapshot = self.latest_industry_snapshot()
+        item = next((item for item in self._industry_items(snapshot) if item.industry_id == industry_id), None) if snapshot else None
+        if item is None:
+            raise KeyError(industry_id)
+        created_at = datetime.now(timezone.utc)
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO industry_watchlist(industry_id, enabled, created_at) VALUES (?, 1, ?)
+                ON CONFLICT(industry_id) DO UPDATE SET enabled=1""",
+                (industry_id, created_at.isoformat()),
+            )
+            row = connection.execute("SELECT * FROM industry_watchlist WHERE industry_id=?", (industry_id,)).fetchone()
+        return IndustryWatchItem(industry_id=industry_id, name=item.name, taxonomy=item.taxonomy, enabled=bool(row["enabled"]), created_at=datetime.fromisoformat(row["created_at"]))
+
+    def list_industry_watches(self) -> list[IndustryWatchItem]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT w.industry_id, m.name, m.taxonomy, w.enabled, w.created_at
+                FROM industry_watchlist w JOIN industry_master m ON m.industry_id=w.industry_id
+                ORDER BY m.name""",
+            ).fetchall()
+        return [IndustryWatchItem(industry_id=row["industry_id"], name=row["name"], taxonomy=row["taxonomy"], enabled=bool(row["enabled"]), created_at=datetime.fromisoformat(row["created_at"])) for row in rows]
+
+    def delete_industry_watch(self, industry_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM industry_watchlist WHERE industry_id=?", (industry_id,))
+        return cursor.rowcount > 0
+
+    def industry_alerts(self) -> list[IndustryAlert]:
+        snapshot = self.latest_industry_snapshot()
+        if snapshot is None:
+            return []
+        with self._connect() as connection:
+            watched = {row["industry_id"] for row in connection.execute("SELECT industry_id FROM industry_watchlist WHERE enabled=1")}
+        return [IndustryAlert(
+            industry_id=item.industry_id, name=item.name, stage=item.stage,
+            direction=item.signal_direction, trade_date=item.trade_date,
+            evidence=item.evidence,
+        ) for item in self._industry_items(snapshot) if item.industry_id in watched and item.stage_changed]
+
+    def backup_bytes(self) -> bytes:
+        with self._connect() as source:
+            target = sqlite3.connect(":memory:")
+            try:
+                source.backup(target)
+                return target.serialize()
+            finally:
+                target.close()
+
+    def industry_export_rows(self) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT d.trade_date, d.industry_id, m.name, m.taxonomy, d.close,
+                   d.return_5d, d.return_20d, d.return_60d, d.relative_return_20d,
+                   d.breadth_ma20, d.breadth_ma60, d.advance_ratio, d.new_high_ratio,
+                   d.volume_ratio, d.coverage_pct, s.stage, s.score, s.signal_direction,
+                   s.execution_date, s.confirmation_days
+                   FROM industry_daily d JOIN industry_master m ON m.industry_id=d.industry_id
+                   LEFT JOIN industry_signals s ON s.industry_id=d.industry_id AND s.trade_date=d.trade_date
+                   ORDER BY d.trade_date, m.name""",
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def verify_industry_signals(self, as_of: date) -> IndustrySignalVerificationResponse:
+        horizons = {"1d": 1, "5d": 5, "20d": 20, "60d": 60}
+        measured_at = datetime.now(timezone.utc).isoformat()
+        outcomes: list[IndustrySignalOutcome] = []
+        with self._connect() as connection:
+            signals = connection.execute(
+                """SELECT id, industry_id, trade_date, signal_direction FROM industry_signals
+                WHERE stage != '数据不足' AND confirmation_days >= 2 ORDER BY trade_date, id""",
+            ).fetchall()
+            benchmark_rows = connection.execute(
+                "SELECT trade_date, close FROM industry_benchmark_daily WHERE benchmark_code='sh000300'",
+            ).fetchall()
+            benchmark = {row["trade_date"]: float(row["close"]) for row in benchmark_rows if row["close"]}
+            daily_cache: dict[str, list[sqlite3.Row]] = {}
+            for signal in signals:
+                industry_id = signal["industry_id"]
+                if industry_id not in daily_cache:
+                    daily_cache[industry_id] = connection.execute(
+                        "SELECT trade_date, close FROM industry_daily WHERE industry_id=? ORDER BY trade_date",
+                        (industry_id,),
+                    ).fetchall()
+                daily = daily_cache[industry_id]
+                dates = [row["trade_date"] for row in daily]
+                try:
+                    signal_index = dates.index(signal["trade_date"])
+                except ValueError:
+                    continue
+                execution_index = signal_index + 1
+                if execution_index >= len(daily):
+                    continue
+                execution_date = daily[execution_index]["trade_date"]
+                baseline = daily[execution_index]["close"]
+                if baseline is None or baseline <= 0:
+                    continue
+                direction = signal["signal_direction"] or "neutral"
+                for horizon, offset in horizons.items():
+                    target_index = execution_index + offset - 1
+                    status = "pending"
+                    note = "等待目标交易日后的板块快照"
+                    return_pct = benchmark_return = relative_return = mfe = mae = None
+                    if target_index < len(daily) and daily[target_index]["trade_date"] <= as_of.isoformat():
+                        target_close = daily[target_index]["close"]
+                        path = [row["close"] for row in daily[execution_index:target_index + 1] if row["close"]]
+                        if target_close and path:
+                            return_pct = round((target_close / baseline - 1) * 100, 4)
+                            path_returns = [(close / baseline - 1) * 100 for close in path]
+                            favorable = path_returns if direction != "weakening" else [-value for value in path_returns]
+                            mfe = round(max(favorable), 4)
+                            mae = round(min(favorable), 4)
+                            benchmark_base = benchmark.get(execution_date)
+                            benchmark_target = benchmark.get(daily[target_index]["trade_date"])
+                            if benchmark_base and benchmark_target:
+                                benchmark_return = round((benchmark_target / benchmark_base - 1) * 100, 4)
+                                relative_return = round(return_pct - benchmark_return, 4)
+                            status, note = "verified", None
+                    elif as_of > date.fromisoformat(signal["trade_date"]) + timedelta(days=offset + 10):
+                        status, note = "unavailable", "目标交易日后仍无足够板块历史快照"
+                    connection.execute(
+                        """INSERT INTO industry_signal_outcomes
+                        (signal_id, horizon, return_pct, benchmark_return_pct, relative_return_pct,
+                         mfe_pct, mae_pct, execution_date, status, measured_at, note)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(signal_id, horizon) DO UPDATE SET
+                          return_pct=excluded.return_pct, benchmark_return_pct=excluded.benchmark_return_pct,
+                          relative_return_pct=excluded.relative_return_pct, mfe_pct=excluded.mfe_pct,
+                         mae_pct=excluded.mae_pct, execution_date=excluded.execution_date,
+                         status=excluded.status,
+                          measured_at=excluded.measured_at, note=excluded.note""",
+                        (signal["id"], horizon, return_pct, benchmark_return, relative_return,
+                         mfe, mae, execution_date, status, measured_at if status != "pending" else None, note),
+                    )
+                    outcomes.append(IndustrySignalOutcome(
+                        signal_id=signal["id"], industry_id=industry_id,
+                        signal_date=date.fromisoformat(signal["trade_date"]), execution_date=date.fromisoformat(execution_date),
+                        signal_direction=direction, horizon=horizon,
+                        return_pct=return_pct, benchmark_return_pct=benchmark_return,
+                        relative_return_pct=relative_return, mfe_pct=mfe, mae_pct=mae,
+                        status=status, measured_at=datetime.fromisoformat(measured_at) if status != "pending" else None,
+                        note=note,
+                    ))
+
+        summaries: list[PerformanceHorizonSummary] = []
+        direction_summary: list[dict[str, object]] = []
+        for horizon in horizons:
+            sample = [item for item in outcomes if item.horizon == horizon]
+            verified = [item for item in sample if item.status == "verified" and item.return_pct is not None]
+            returns = [item.return_pct for item in verified if item.return_pct is not None]
+            relatives = [item.relative_return_pct for item in verified if item.relative_return_pct is not None]
+            directional_returns = [value if item.signal_direction != "weakening" else -value for item, value in ((item, item.return_pct) for item in verified) if value is not None]
+            summaries.append(PerformanceHorizonSummary(
+                horizon=horizon, samples=len(sample), verified=len(verified),
+                wins=sum(value > 0 for value in directional_returns),
+                win_rate_pct=round(sum(value > 0 for value in directional_returns) / len(directional_returns) * 100, 2) if directional_returns else None,
+                average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
+                median_return_pct=round(median(returns), 4) if returns else None,
+                benchmark_code="sh000300" if relatives else None,
+                average_relative_return_pct=round(sum(relatives) / len(relatives), 4) if relatives else None,
+            ))
+            for direction in ("improving", "weakening", "neutral"):
+                directional = [item for item in verified if item.signal_direction == direction]
+                favorable = [item.return_pct if direction != "weakening" else -item.return_pct for item in directional if item.return_pct is not None]
+                direction_summary.append({
+                    "horizon": horizon, "direction": direction, "samples": len(directional),
+                    "verified": len(favorable), "wins": sum(value > 0 for value in favorable),
+                    "win_rate_pct": round(sum(value > 0 for value in favorable) / len(favorable) * 100, 2) if favorable else None,
+                    "average_mfe_pct": round(sum(item.mfe_pct for item in directional if item.mfe_pct is not None) / len([item for item in directional if item.mfe_pct is not None]), 4) if any(item.mfe_pct is not None for item in directional) else None,
+                    "average_mae_pct": round(sum(item.mae_pct for item in directional if item.mae_pct is not None) / len([item for item in directional if item.mae_pct is not None]), 4) if any(item.mae_pct is not None for item in directional) else None,
+                })
+        counts = {status: sum(item.status == status for item in outcomes) for status in ("verified", "pending", "unavailable")}
+        return IndustrySignalVerificationResponse(
+            as_of=as_of, processed=len(outcomes), verified=counts["verified"],
+            pending=counts["pending"], unavailable=counts["unavailable"],
+            outcomes=outcomes, horizon_summary=summaries, direction_summary=direction_summary,
+        )
 
     def list_source_health(self) -> list[DataSourceHealth]:
         with self._connect() as connection:

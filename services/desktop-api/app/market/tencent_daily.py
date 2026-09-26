@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.models import DailyIndicators, StockPreset
+from app.market.daily_contract import parse_daily_rows, parse_tencent_daily
 
 
 class TencentDailyProvider:
@@ -39,23 +40,13 @@ class TencentDailyProvider:
         )
         with urlopen(request, timeout=self.timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        if payload.get("code") != 0:
-            raise ValueError(payload.get("msg") or "daily endpoint returned an error")
-        rows = payload.get("data", {}).get(code, {}).get("qfqday") or payload.get("data", {}).get(code, {}).get("day") or []
+        bars = parse_tencent_daily(payload, code)
+        rows = [[bar.trade_date, bar.open, bar.close, bar.high, bar.low, bar.volume] for bar in bars]
         return self.parse_rows(code, rows)
 
     @classmethod
     def parse_rows(cls, code: str, rows: list[list[str]]) -> DailyIndicators:
-        valid: list[tuple[str, float]] = []
-        for row in rows:
-            if len(row) < 3:
-                continue
-            try:
-                close = float(row[2])
-            except (TypeError, ValueError):
-                continue
-            if close > 0:
-                valid.append((str(row[0]), close))
+        valid = [(bar.trade_date.isoformat(), bar.close) for bar in parse_daily_rows(rows)]
         if len(valid) < 20:
             return DailyIndicators(
                 stock_code=code, bar_count=len(valid),
